@@ -122,7 +122,7 @@ my-jira-gadget/
 
 ## CI pipeline
 
-The GitHub Actions workflow in `.github/workflows/build.yml` runs on demand: open **Actions > Build > Run workflow**. It runs two gates in parallel before building:
+The GitHub Actions workflow in `.github/workflows/build.yml` runs automatically on every push to any branch that contains it. It also supports on-demand runs from **Actions > Build > Run workflow**; the button only appears when the workflow exists on the repository's default branch. It runs two gates in parallel before building:
 
 - **Lint** — validates the Maven project and XML descriptors, syntax-checks the gadget JavaScript, and runs Checkstyle (report uploaded as the `checkstyle-report` artifact).
 - **Security scan** — runs Trivy against dependencies and the repository for `CRITICAL`/`HIGH` vulnerabilities and secrets.
