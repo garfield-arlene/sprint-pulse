@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<atlassian-plugin key="${project.groupId}.${project.artifactId}"
+                  name="${project.name}"
+                  plugins-version="2">
+    <plugin-info>
+        <description>${project.description}</description>
+        <version>${project.version}</version>
+        <vendor name="Example Corp" url="http://example.com"/>
+    </plugin-info>
+
+    <gadget key="sprint-pulse" name="Sprint Pulse" location="gadget/my-gadget.xml">
+        <description>Sprint health metrics and issues grouped by status with story points — combines Sprint Health and Sprint Statistics</description>
+    </gadget>
+
+    <resource type="i18n" name="i18n" location="gadget"/>
+
+    <rest key="gadget-rest" path="/sprint" version="1.0">
+        <description>REST endpoints for sprint gadget</description>
+        <package>com.garfieldArlene.jira.gadget.rest</package>
+    </rest>
+</atlassian-plugin>
