@@ -120,6 +120,15 @@ my-jira-gadget/
 - `my-gadget.xml` — gadget definition, preferences, styles, and client-side rendering.
 - `atlassian-plugin.xml` — plugin descriptor (gadget and REST modules).
 
+## CI pipeline
+
+The GitHub Actions workflow in `.github/workflows/build.yml` runs on demand: open **Actions > Build > Run workflow**. It runs two gates in parallel before building:
+
+- **Lint** — validates the Maven project and XML descriptors, syntax-checks the gadget JavaScript, and runs Checkstyle (report uploaded as the `checkstyle-report` artifact).
+- **Security scan** — runs Trivy against dependencies and the repository for `CRITICAL`/`HIGH` vulnerabilities and secrets.
+
+The build job then packages the plugin and uploads the JAR and OBR as the `sprint-pulse-plugin` artifact.
+
 ## Development notes
 
 - QuickReload is enabled (`enableQuickReload`), so `mvn jira:run` picks up many changes without a restart. Changes to `atlassian-plugin.xml` or Spring wiring normally still require a restart.
