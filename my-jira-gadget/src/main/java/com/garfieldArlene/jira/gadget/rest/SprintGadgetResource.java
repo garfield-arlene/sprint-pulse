@@ -1,4 +1,4 @@
-package com.garfieldArlene.jira.gadget.rest;
+package com.garfieldarlene.jira.gadget.rest;
 
 import com.atlassian.jira.bc.issue.search.SearchService;
 import com.atlassian.jira.component.ComponentAccessor;
@@ -11,28 +11,48 @@ import com.atlassian.jira.issue.search.SearchResults;
 import com.atlassian.jira.security.JiraAuthenticationContext;
 import com.atlassian.jira.user.ApplicationUser;
 import com.atlassian.jira.web.bean.PagerFilter;
-import com.google.gson.*;
-import javax.servlet.http.HttpServletRequest;
-import javax.ws.rs.*;
-import javax.ws.rs.core.Context;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import javax.servlet.http.HttpServletRequest;
+import javax.ws.rs.*;
+import javax.ws.rs.core.Context;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
+import java.util.Arrays;
 
+/**
+ * REST resource providing sprint health data and issue details for the Sprint Pulse gadget.
+ * Endpoints:
+ * <ul>
+ *   <li>GET /rest/sprint/1.0/data - sprint health, issues by status</li>
+ *   <li>GET /rest/sprint/1.0/sprints - available sprints for a board</li>
+ * </ul>
+ */
 @Path("")
 public class SprintGadgetResource {
 
-    private static final String STORY_POINTS_CF_NAME = "Story Points";
-    private static final String STORY_POINTS_CF_ALT = "Story Point Estimate";
+  private static final String STORY_POINTS_CF_NAME = "Story Points";
+  private static final String STORY_POINTS_CF_ALT = "Story Point Estimate";
 
-    private static final java.util.logging.Logger LOG =
-        java.util.logging.Logger.getLogger("com.garfieldArlene.sprintgadget");
+  private static final java.util.logging.Logger LOG =
+      java.util.logging.Logger.getLogger("com.garfieldarlene.sprintgadget");
 
     @GET
     @Path("/data")
