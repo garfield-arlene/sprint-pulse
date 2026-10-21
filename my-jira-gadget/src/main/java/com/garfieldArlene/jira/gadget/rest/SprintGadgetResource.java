@@ -54,6 +54,16 @@ public class SprintGadgetResource {
   private static final java.util.logging.Logger LOG =
       java.util.logging.Logger.getLogger("com.garfieldarlene.sprintgadget");
 
+  private static final java.util.concurrent.ExecutorService REPORT_EXECUTOR =
+      java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+        Thread t = new Thread(r, "sprint-report-fetcher");
+        t.setDaemon(true);
+        return t;
+      });
+
+  private static final java.util.concurrent.ConcurrentMap<String, JsonObject> REPORT_CACHE =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
     @GET
     @Path("/data")
     @Produces(MediaType.APPLICATION_JSON)
@@ -255,7 +265,32 @@ public class SprintGadgetResource {
     }
 
     private JsonObject fetchSprintReport(long rapidViewId, long sprintId, HttpServletRequest request) {
-        if (rapidViewId == 0 || sprintId == 0) return null;
+        if (rapidViewId == 0 || sprintId == 0) {
+            return null;
+        }
+        String cacheKey = rapidViewId + ":" + sprintId;
+        JsonObject cached = REPORT_CACHE.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+        java.util.concurrent.CompletableFuture<JsonObject> future = java.util.concurrent.CompletableFuture.supplyAsync(
+            () -> fetchSprintReportInternal(rapidViewId, sprintId, request), REPORT_EXECUTOR);
+        try {
+            JsonObject result = future.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (result != null) {
+                REPORT_CACHE.put(cacheKey, result);
+            }
+            return result;
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING, "fetchSprintReport async failed or timed out", e);
+            return null;
+        }
+    }
+
+    private JsonObject fetchSprintReportInternal(long rapidViewId, long sprintId, HttpServletRequest request) {
+        if (rapidViewId == 0 || sprintId == 0) {
+            return null;
+        }
         try {
             String baseUrl = null;
             if (request != null) {
@@ -268,7 +303,9 @@ public class SprintGadgetResource {
             if (baseUrl == null) {
                 baseUrl = ComponentAccessor.getApplicationProperties().getString(com.atlassian.jira.config.properties.APKeys.JIRA_BASEURL);
             }
-            if (baseUrl == null) baseUrl = "http://localhost:2990/jira";
+            if (baseUrl == null) {
+                baseUrl = "http://localhost:2990/jira";
+            }
             baseUrl = baseUrl.replaceAll("/$", "");
             URL url = new URL(baseUrl + "/rest/greenhopper/1.0/rapid/charts/sprintreport?rapidViewId=" + rapidViewId + "&sprintId=" + sprintId);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -278,9 +315,13 @@ public class SprintGadgetResource {
             conn.setReadTimeout(3000);
             if (request != null) {
                 String cookie = request.getHeader("Cookie");
-                if (cookie != null) conn.setRequestProperty("Cookie", cookie);
+                if (cookie != null) {
+                    conn.setRequestProperty("Cookie", cookie);
+                }
                 String authorization = request.getHeader("Authorization");
-                if (authorization != null) conn.setRequestProperty("Authorization", authorization);
+                if (authorization != null) {
+                    conn.setRequestProperty("Authorization", authorization);
+                }
             }
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) {
@@ -291,11 +332,13 @@ public class SprintGadgetResource {
             StringBuilder sb = new StringBuilder();
             BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
             String line;
-            while ((line = br.readLine()) != null) sb.append(line);
+            while ((line = br.readLine()) != null) {
+                sb.append(line);
+            }
             br.close();
             return new JsonParser().parse(sb.toString()).getAsJsonObject();
         } catch (Exception e) {
-            LOG.log(java.util.logging.Level.WARNING, "fetchSprintReport failed", e);
+            LOG.log(java.util.logging.Level.WARNING, "fetchSprintReportInternal failed", e);
             return null;
         }
     }
@@ -568,5 +611,21 @@ public class SprintGadgetResource {
             // Ignore
         }
         return 0L;
+    }
+
+    public static void shutdownReportExecutor() {
+        REPORT_EXECUTOR.shutdown();
+        try {
+            if (!REPORT_EXECUTOR.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                REPORT_EXECUTOR.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            REPORT_EXECUTOR.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    static {
+        Runtime.getRuntime().addShutdownHook(new Thread(SprintGadgetResource::shutdownReportExecutor));
     }
 }
