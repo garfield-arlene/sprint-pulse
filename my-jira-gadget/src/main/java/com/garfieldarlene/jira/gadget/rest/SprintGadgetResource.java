@@ -279,8 +279,15 @@ public class SprintGadgetResource {
         if (cached != null) {
             return cached;
         }
+        // The injected HttpServletRequest is a Jersey proxy bound to the request
+        // thread, so it cannot be dereferenced from a worker thread. Resolve every
+        // request-scoped value here, on the request thread, and hand the worker
+        // plain values only.
+        String baseUrl = resolveBaseUrl(request);
+        String cookie = request != null ? request.getHeader("Cookie") : null;
+        String authorization = request != null ? request.getHeader("Authorization") : null;
         java.util.concurrent.CompletableFuture<JsonObject> future = java.util.concurrent.CompletableFuture.supplyAsync(
-            () -> fetchSprintReportInternal(rapidViewId, sprintId, request), executor());
+            () -> fetchSprintReportInternal(rapidViewId, sprintId, baseUrl, cookie, authorization), executor());
         try {
             JsonObject result = future.get(5, java.util.concurrent.TimeUnit.SECONDS);
             if (result != null) {
@@ -293,41 +300,46 @@ public class SprintGadgetResource {
         }
     }
 
-    private JsonObject fetchSprintReportInternal(long rapidViewId, long sprintId, HttpServletRequest request) {
-        if (rapidViewId == 0 || sprintId == 0) {
-            return null;
-        }
-        try {
-            String baseUrl = null;
-            if (request != null) {
+    private String resolveBaseUrl(HttpServletRequest request) {
+        String baseUrl = null;
+        if (request != null) {
+            try {
                 int port = request.getServerPort();
                 boolean defaultPort = ("http".equals(request.getScheme()) && port == 80)
                     || ("https".equals(request.getScheme()) && port == 443);
                 baseUrl = request.getScheme() + "://" + request.getServerName()
                     + (defaultPort ? "" : ":" + port) + request.getContextPath();
+            } catch (Exception e) {
+                LOG.log(java.util.logging.Level.WARNING, "resolveBaseUrl failed", e);
+                baseUrl = null;
             }
-            if (baseUrl == null) {
-                baseUrl = ComponentAccessor.getApplicationProperties().getString(com.atlassian.jira.config.properties.APKeys.JIRA_BASEURL);
-            }
-            if (baseUrl == null) {
-                baseUrl = "http://localhost:2990/jira";
-            }
-            baseUrl = baseUrl.replaceAll("/$", "");
+        }
+        if (baseUrl == null) {
+            baseUrl = ComponentAccessor.getApplicationProperties().getString(com.atlassian.jira.config.properties.APKeys.JIRA_BASEURL);
+        }
+        if (baseUrl == null) {
+            baseUrl = "http://localhost:2990/jira";
+        }
+        return baseUrl.replaceAll("/$", "");
+    }
+
+    private JsonObject fetchSprintReportInternal(long rapidViewId, long sprintId, String baseUrl,
+                                                 String cookie, String authorization) {
+        if (rapidViewId == 0 || sprintId == 0) {
+            return null;
+        }
+        try {
             URL url = new URL(baseUrl + "/rest/greenhopper/1.0/rapid/charts/sprintreport?rapidViewId=" + rapidViewId + "&sprintId=" + sprintId);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             conn.setRequestProperty("Accept", "application/json");
             conn.setConnectTimeout(3000);
             conn.setReadTimeout(3000);
-            if (request != null) {
-                String cookie = request.getHeader("Cookie");
-                if (cookie != null) {
-                    conn.setRequestProperty("Cookie", cookie);
-                }
-                String authorization = request.getHeader("Authorization");
-                if (authorization != null) {
-                    conn.setRequestProperty("Authorization", authorization);
-                }
+            if (cookie != null) {
+                conn.setRequestProperty("Cookie", cookie);
+            }
+            if (authorization != null) {
+                conn.setRequestProperty("Authorization", authorization);
             }
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) {
