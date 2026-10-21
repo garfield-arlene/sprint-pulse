@@ -16,6 +16,6 @@
 
     <rest key="gadget-rest" path="/sprint" version="1.0">
         <description>REST endpoints for sprint gadget</description>
-        <package>com.garfieldArlene.jira.gadget.rest</package>
+        <package>com.garfieldarlene.jira.gadget.rest</package>
     </rest>
 </atlassian-plugin>
