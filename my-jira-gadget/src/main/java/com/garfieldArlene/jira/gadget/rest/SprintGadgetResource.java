@@ -54,17 +54,23 @@ public class SprintGadgetResource {
   private static final java.util.logging.Logger LOG =
       java.util.logging.Logger.getLogger("com.garfieldarlene.sprintgadget");
 
-  private static final java.util.concurrent.ExecutorService REPORT_EXECUTOR =
-      java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
-        Thread t = new Thread(r, "sprint-report-fetcher");
-        t.setDaemon(true);
-        return t;
-      });
-
   private static final java.util.concurrent.ConcurrentMap<String, JsonObject> REPORT_CACHE =
       new java.util.concurrent.ConcurrentHashMap<>();
 
-    @GET
+  private static final class ExecutorHolder {
+      static final java.util.concurrent.ExecutorService INSTANCE =
+          java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+            Thread t = new Thread(r, "sprint-report-fetcher");
+            t.setDaemon(true);
+            return t;
+          });
+  }
+
+  private static java.util.concurrent.ExecutorService executor() {
+      return ExecutorHolder.INSTANCE;
+  }
+
+  @GET
     @Path("/data")
     @Produces(MediaType.APPLICATION_JSON)
     public Response getSprintData(@Context HttpServletRequest request,
@@ -274,7 +280,7 @@ public class SprintGadgetResource {
             return cached;
         }
         java.util.concurrent.CompletableFuture<JsonObject> future = java.util.concurrent.CompletableFuture.supplyAsync(
-            () -> fetchSprintReportInternal(rapidViewId, sprintId, request), REPORT_EXECUTOR);
+            () -> fetchSprintReportInternal(rapidViewId, sprintId, request), executor());
         try {
             JsonObject result = future.get(5, java.util.concurrent.TimeUnit.SECONDS);
             if (result != null) {
@@ -614,18 +620,14 @@ public class SprintGadgetResource {
     }
 
     public static void shutdownReportExecutor() {
-        REPORT_EXECUTOR.shutdown();
+        ExecutorHolder.INSTANCE.shutdown();
         try {
-            if (!REPORT_EXECUTOR.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                REPORT_EXECUTOR.shutdownNow();
+            if (!ExecutorHolder.INSTANCE.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                ExecutorHolder.INSTANCE.shutdownNow();
             }
         } catch (InterruptedException e) {
-            REPORT_EXECUTOR.shutdownNow();
+            ExecutorHolder.INSTANCE.shutdownNow();
             Thread.currentThread().interrupt();
         }
-    }
-
-    static {
-        Runtime.getRuntime().addShutdownHook(new Thread(SprintGadgetResource::shutdownReportExecutor));
     }
 }
