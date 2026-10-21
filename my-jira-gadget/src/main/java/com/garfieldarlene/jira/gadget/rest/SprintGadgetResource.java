@@ -51,6 +51,37 @@ public class SprintGadgetResource {
   private static final String STORY_POINTS_CF_NAME = "Story Points";
   private static final String STORY_POINTS_CF_ALT = "Story Point Estimate";
 
+  /**
+   * How long a fetched greenhopper sprint report may be reused.
+   *
+   * <p>The report is the only source of the scope change figures (issues added to and removed
+   * from the sprint), so a cached copy that never expires freezes those numbers for the life
+   * of the plugin: a story added to or moved out of the sprint keeps the old counts. Every
+   * cached entry therefore carries a timestamp and is discarded once it is older than this
+   * TTL, which bounds how stale the gadget can ever show data.
+   */
+  private static final long REPORT_CACHE_TTL_MILLIS = 30_000L;
+
+  /** Upper bound on cached reports, so many sprints cannot grow the cache without limit. */
+  private static final int REPORT_CACHE_MAX_ENTRIES = 20;
+
+  private static final java.util.concurrent.ConcurrentMap<String, CachedSprintReport> REPORT_CACHE =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
+  private static final class CachedSprintReport {
+    private final JsonObject report;
+    private final long fetchedAt;
+
+    CachedSprintReport(JsonObject report) {
+      this.report = report;
+      this.fetchedAt = System.currentTimeMillis();
+    }
+
+    boolean isExpired() {
+      return System.currentTimeMillis() - fetchedAt >= REPORT_CACHE_TTL_MILLIS;
+    }
+  }
+
   private static final java.util.logging.Logger LOG =
       java.util.logging.Logger.getLogger("com.garfieldarlene.sprintgadget");
 
@@ -256,6 +287,14 @@ public class SprintGadgetResource {
 
     private JsonObject fetchSprintReport(long rapidViewId, long sprintId, HttpServletRequest request) {
         if (rapidViewId == 0 || sprintId == 0) return null;
+        String cacheKey = rapidViewId + ":" + sprintId;
+        CachedSprintReport cached = REPORT_CACHE.get(cacheKey);
+        if (cached != null) {
+            if (!cached.isExpired()) {
+                return cached.report;
+            }
+            REPORT_CACHE.remove(cacheKey, cached);
+        }
         try {
             String baseUrl = null;
             if (request != null) {
@@ -293,10 +332,28 @@ public class SprintGadgetResource {
             String line;
             while ((line = br.readLine()) != null) sb.append(line);
             br.close();
-            return new JsonParser().parse(sb.toString()).getAsJsonObject();
+            JsonObject report = new JsonParser().parse(sb.toString()).getAsJsonObject();
+            REPORT_CACHE.put(cacheKey, new CachedSprintReport(report));
+            evictExpiredReports();
+            return report;
         } catch (Exception e) {
             LOG.log(java.util.logging.Level.WARNING, "fetchSprintReport failed", e);
             return null;
+        }
+    }
+
+    /**
+     * Drops expired entries once the cache grows past its bound. Entries are also discarded
+     * when they are read, so this only keeps the footprint of a long running instance small.
+     */
+    private void evictExpiredReports() {
+        if (REPORT_CACHE.size() <= REPORT_CACHE_MAX_ENTRIES) {
+            return;
+        }
+        for (Map.Entry<String, CachedSprintReport> entry : REPORT_CACHE.entrySet()) {
+            if (entry.getValue().isExpired()) {
+                REPORT_CACHE.remove(entry.getKey(), entry.getValue());
+            }
         }
     }
 
