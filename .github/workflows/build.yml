@@ -61,6 +61,9 @@ jobs:
           PY
           node --check gadget.js
 
+      - name: Smoke test gadget JavaScript
+        run: node tests/gadget-smoke-test.js
+
       - name: Run Checkstyle
         working-directory: my-jira-gadget
         run: >

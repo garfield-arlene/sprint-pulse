@@ -122,18 +122,20 @@ my-jira-gadget/
 - `SprintGadgetResource.java` — REST endpoints, sprint discovery, health calculations, issue serialization.
 - `my-gadget.xml` — gadget definition, preferences, styles, and client-side rendering.
 - `atlassian-plugin.xml` — plugin descriptor (gadget and REST modules).
+- `tests/gadget-smoke-test.js` — runs the gadget JavaScript in a stubbed DOM/fetch sandbox to check loading, auto-refresh, preferences, and the board selector.
 
 ## CI pipeline
 
 The GitHub Actions workflow in `.github/workflows/build.yml` runs automatically on every push to any branch that contains it. It also supports on-demand runs from **Actions > Build > Run workflow**; the button only appears when the workflow exists on the repository's default branch. It runs two gates in parallel before building:
 
-- **Lint** — validates the Maven project and XML descriptors, syntax-checks the gadget JavaScript, and runs Checkstyle (report uploaded as the `checkstyle-report` artifact).
+- **Lint** — validates the Maven project and XML descriptors, syntax-checks the gadget JavaScript, smoke-tests it against a stubbed DOM, and runs Checkstyle (report uploaded as the `checkstyle-report` artifact).
 - **Security scan** — runs Trivy against dependencies and the repository for `CRITICAL`/`HIGH` vulnerabilities and secrets.
 
 The build job then packages the plugin and uploads the JAR and OBR as the `sprint-pulse-plugin` artifact.
 
 ## Development notes
 
+- `node tests/gadget-smoke-test.js` (Node 20, no dependencies) exercises the gadget JavaScript locally; CI runs the same script.
 - QuickReload is enabled (`enableQuickReload`), so `mvn jira:run` picks up many changes without a restart. Changes to `atlassian-plugin.xml` or Spring wiring normally still require a restart.
 - `cdp-verify.ps1` is a Windows PowerShell helper that uses the Chrome DevTools Protocol to open a dashboard in a running Jira instance, select sprint `1`, verify the health cards render, and save a screenshot:
 
