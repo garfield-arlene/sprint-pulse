@@ -56,6 +56,8 @@
                 .refresh-btn:hover { background: #0065ff; }
                 .refresh-btn:disabled { background: #a5adba; cursor: not-allowed; }
                 .last-updated { font-size: 11px; color: #5e6c84; white-space: nowrap; }
+                .interval-select { padding: 6px 8px; border: 1px solid #dfe1e6; border-radius: 3px; font-size: 12px; background: #fff; color: #42526e; cursor: pointer; }
+                .interval-select:focus { outline: none; border-color: #0052cc; box-shadow: 0 0 0 2px rgba(0,82,204,0.2); }
                 
                 /* Health Summary */
                 .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
@@ -176,6 +178,12 @@
                                 <span id="btnText">Refresh</span>
                                 <span id="btnSpinner" class="spinner" style="display:none;"></span>
                             </button>
+                            <select id="refreshIntervalSelect" class="interval-select" aria-label="Auto refresh interval" title="Auto refresh interval">
+                                <option value="0">Auto off</option>
+                                <option value="30">Every 30s</option>
+                                <option value="60">Every 1m</option>
+                                <option value="300">Every 5m</option>
+                            </select>
                             <span id="lastUpdated" class="last-updated"></span>
                         </div>
                     </div>
@@ -244,6 +252,7 @@
                     var prefs = new gadgets.Prefs();
                     var sprintSelect = document.getElementById('sprintSelect');
                     var refreshBtn = document.getElementById('refreshBtn');
+                    var intervalSelect = document.getElementById('refreshIntervalSelect');
                     var btnText = document.getElementById('btnText');
                     var btnSpinner = document.getElementById('btnSpinner');
                     var healthSection = document.getElementById('healthSection');
@@ -280,8 +289,28 @@
                     var refreshIntervalSec = parseInt(prefString('refreshInterval', '30'), 10);
                     if (isNaN(refreshIntervalSec)) refreshIntervalSec = 30;
 
+                    var INTERVAL_OPTIONS = [0, 30, 60, 300];
+
                     var isLoading = false;
                     var lastUpdatedAt = null;
+
+                    // The dashboard does not always give access to the gadget's
+                    // configuration form, so the interval is also selectable in the
+                    // gadget itself. Both write to the same preference.
+                    function applyInterval(sec, persist) {
+                        refreshIntervalSec = parseInt(sec, 10);
+                        if (isNaN(refreshIntervalSec) || INTERVAL_OPTIONS.indexOf(refreshIntervalSec) === -1) {
+                            refreshIntervalSec = 30;
+                        }
+                        if (intervalSelect) intervalSelect.value = String(refreshIntervalSec);
+                        if (persist) {
+                            try { prefs.set('refreshInterval', String(refreshIntervalSec)); } catch (e) { /* not persisted, still applied */ }
+                        }
+                        startAutoRefresh();
+                    }
+
+                    if (INTERVAL_OPTIONS.indexOf(refreshIntervalSec) === -1) refreshIntervalSec = 30;
+                    if (intervalSelect) intervalSelect.value = String(refreshIntervalSec);
 
                     // The timer lives on window so a re-rendered gadget clears the previous
                     // one instead of leaving it polling against a detached DOM.
@@ -635,6 +664,12 @@
                         }
                     });
 
+                    if (intervalSelect) {
+                        intervalSelect.addEventListener('change', function() {
+                            applyInterval(this.value, true);
+                        });
+                    }
+
                     refreshBtn.addEventListener('click', function() {
                         if (currentSprintId) loadSprintData(currentSprintId);
                         else loadSprints();
@@ -664,9 +699,7 @@
                             showTable = newPrefs.showTable !== undefined ? newPrefs.showTable : true;
                             groupByStatus = newPrefs.groupByStatus !== undefined ? newPrefs.groupByStatus : true;
                             if (newPrefs.refreshInterval !== undefined) {
-                                refreshIntervalSec = parseInt(newPrefs.refreshInterval, 10);
-                                if (isNaN(refreshIntervalSec)) refreshIntervalSec = 30;
-                                startAutoRefresh();
+                                applyInterval(newPrefs.refreshInterval, false);
                             }
                         }
                     });
