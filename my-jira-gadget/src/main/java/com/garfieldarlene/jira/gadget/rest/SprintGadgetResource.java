@@ -75,6 +75,9 @@ public class SprintGadgetResource {
   /** Sprint list ordering: the running sprint first, then sprints still to come, then history. */
   private static final List<String> SPRINT_STATE_ORDER = Arrays.asList("ACTIVE", "FUTURE", "CLOSED");
 
+  /** How much closed sprint history the list keeps; older sprints only bloat the dropdown. */
+  private static final int MAX_CLOSED_SPRINTS = 20;
+
   /**
    * The sprint report's issue lists. Every issue scoped to the sprint appears in exactly one of
    * them, so together they also cover an issue that was added and later removed.
@@ -188,12 +191,15 @@ public class SprintGadgetResource {
     /**
      * Lists sprints through greenhopper's own services, which includes sprints that have no
      * issues yet and scopes the list to boards the user may see. Falls back to reading the
-     * Sprint custom field off issues if the services cannot be resolved.
+     * Sprint custom field off issues if the services cannot be resolved. List results are
+     * ordered for the dropdown and trimmed to the recent closed sprints; single lookups are not.
      */
     private List<Object> findSprints(Long sprintId, Long boardId) {
         List<Object> sprints = findSprintsFromServices(sprintId, boardId);
-        if (sprints != null) return sprints;
-        return findSprintsFromIssues(sprintId, boardId);
+        if (sprints == null) sprints = findSprintsFromIssues(sprintId, boardId);
+        if (sprintId != null) return sprints;
+        sprints.sort(this::compareSprints);
+        return limitClosedSprints(sprints);
     }
 
     /**
@@ -243,7 +249,6 @@ public class SprintGadgetResource {
                 }
             }
             sprints.addAll(byId.values());
-            sprints.sort(this::compareSprints);
             return sprints;
         } catch (Exception e) {
             LOG.log(java.util.logging.Level.WARNING,
@@ -290,18 +295,52 @@ public class SprintGadgetResource {
     }
 
     /**
-     * Current sprint first, then future, then closed; within a state by sequence, so the list
-     * opens on the sprint users care about and keeps later sprints in planning order.
+     * Running sprint first, then future ones in planned start order, then closed ones newest
+     * first, so the list opens on the current sprint and the retained history is the recent one.
+     * Sequence numbers are per board, so they cannot order sprints from several boards.
      */
     private int compareSprints(Object left, Object right) {
         int byState = Integer.compare(sprintStateRank(left), sprintStateRank(right));
         if (byState != 0) return byState;
-        return Long.compare(invokeLong(left, "getSequence"), invokeLong(right, "getSequence"));
+        if ("CLOSED".equals(invokeEnumName(left, "getState"))) {
+            return Long.compare(sprintEndTime(right), sprintEndTime(left));
+        }
+        return Long.compare(sprintStartTime(left), sprintStartTime(right));
     }
 
     private int sprintStateRank(Object sprint) {
         int index = SPRINT_STATE_ORDER.indexOf(invokeEnumName(sprint, "getState"));
         return index < 0 ? SPRINT_STATE_ORDER.size() : index;
+    }
+
+    /**
+     * Keeps only the most recent closed sprints. Discovery returns the whole history of every
+     * visible board, which on a long-lived instance would fill the dropdown with old sprints.
+     * The list must already be sorted newest first.
+     */
+    private List<Object> limitClosedSprints(List<Object> sprints) {
+        List<Object> limited = new ArrayList<>();
+        int closed = 0;
+        for (Object sprint : sprints) {
+            if ("CLOSED".equals(invokeEnumName(sprint, "getState"))
+                && ++closed > MAX_CLOSED_SPRINTS) {
+                continue;
+            }
+            limited.add(sprint);
+        }
+        return limited;
+    }
+
+    /** Start time in millis, or the end of time so undated future sprints sort last. */
+    private long sprintStartTime(Object sprint) {
+        long start = invokeDateTime(sprint, "getStartDate");
+        return start != 0L ? start : Long.MAX_VALUE;
+    }
+
+    /** End time in millis, falling back to the completion time for sprints closed without one. */
+    private long sprintEndTime(Object sprint) {
+        long end = invokeDateTime(sprint, "getEndDate");
+        return end != 0L ? end : invokeDateTime(sprint, "getCompleteDate");
     }
 
     private CustomField getSprintCustomField() {
