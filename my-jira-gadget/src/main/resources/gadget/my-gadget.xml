@@ -15,6 +15,12 @@
         <UserPref name="showHealth" display_name="Show Health Summary" datatype="bool" default_value="true"/>
         <UserPref name="showTable" display_name="Show Issues Table" datatype="bool" default_value="true"/>
         <UserPref name="groupByStatus" display_name="Group by Status" datatype="bool" default_value="true"/>
+        <UserPref name="refreshInterval" display_name="Auto refresh" datatype="list" default_value="30">
+            <Option selected="true" value="30">Every 30 seconds</Option>
+            <Option value="60">Every minute</Option>
+            <Option value="300">Every 5 minutes</Option>
+            <Option value="0">Off</Option>
+        </UserPref>
 
         <Locale lang="en" country="US">
             <msg name="gadget.title">Sprint Pulse</msg>
@@ -24,6 +30,7 @@
             <msg name="prefs.showHealth">Show Health Summary</msg>
             <msg name="prefs.showTable">Show Issues Table</msg>
             <msg name="prefs.groupByStatus">Group by Status</msg>
+            <msg name="prefs.refreshInterval">Auto refresh</msg>
         </Locale>
     </ModulePrefs>
 
@@ -48,6 +55,7 @@
                 .refresh-btn { padding: 6px 12px; background: #0052cc; color: #fff; border: none; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap; }
                 .refresh-btn:hover { background: #0065ff; }
                 .refresh-btn:disabled { background: #a5adba; cursor: not-allowed; }
+                .last-updated { font-size: 11px; color: #5e6c84; white-space: nowrap; }
                 
                 /* Health Summary */
                 .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
@@ -168,6 +176,7 @@
                                 <span id="btnText">Refresh</span>
                                 <span id="btnSpinner" class="spinner" style="display:none;"></span>
                             </button>
+                            <span id="lastUpdated" class="last-updated"></span>
                         </div>
                     </div>
                 </div>
@@ -268,6 +277,39 @@
                     var showHealth = prefBool('showHealth', true);
                     var showTable = prefBool('showTable', true);
                     var groupByStatus = prefBool('groupByStatus', true);
+                    var refreshIntervalSec = parseInt(prefString('refreshInterval', '30'), 10);
+                    if (isNaN(refreshIntervalSec)) refreshIntervalSec = 30;
+
+                    var isLoading = false;
+                    var lastUpdatedAt = null;
+
+                    // The timer lives on window so a re-rendered gadget clears the previous
+                    // one instead of leaving it polling against a detached DOM.
+                    function stopAutoRefresh() {
+                        if (window.__sprintPulseRefreshTimer) {
+                            clearInterval(window.__sprintPulseRefreshTimer);
+                            window.__sprintPulseRefreshTimer = null;
+                        }
+                    }
+                    stopAutoRefresh();
+
+                    function startAutoRefresh() {
+                        stopAutoRefresh();
+                        if (!refreshIntervalSec || refreshIntervalSec <= 0 || !currentSprintId) return;
+                        window.__sprintPulseRefreshTimer = setInterval(autoRefreshTick, refreshIntervalSec * 1000);
+                    }
+
+                    function autoRefreshTick() {
+                        if (document.hidden) return;
+                        if (isLoading || !currentSprintId) return;
+                        loadSprintData(currentSprintId, true);
+                    }
+
+                    function markUpdated() {
+                        lastUpdatedAt = new Date();
+                        var el = document.getElementById('lastUpdated');
+                        if (el) el.textContent = 'Updated ' + lastUpdatedAt.toLocaleTimeString();
+                    }
 
                     // Status badge mapping
                     var statusBadgeClass = {
@@ -329,13 +371,16 @@
                         return num % 1 === 0 ? num.toString() : num.toFixed(1);
                     }
 
-                    function setLoading(loading) {
+                    function setLoading(loading, silent) {
+                        isLoading = loading;
+                        if (silent) return;
                         refreshBtn.disabled = loading;
                         btnText.textContent = loading ? 'Loading...' : 'Refresh';
                         btnSpinner.style.display = loading ? 'inline-block' : 'none';
                     }
 
                     function showError(msg) {
+                        stopAutoRefresh();
                         healthSection.style.display = 'none';
                         tableSection.style.display = 'none';
                         document.getElementById('gadget').innerHTML = 
@@ -382,20 +427,26 @@
                         });
                     }
 
-                    function loadSprintData(sprintId) {
-                        setLoading(true);
+                    function loadSprintData(sprintId, silent) {
+                        if (isLoading) return;
+                        setLoading(true, silent);
                         var url = baseUrl + '/rest/sprint/1.0/data?sprintId=' + sprintId;
 
                         ajaxGet(url, function(data) {
-                            setLoading(false);
-                            if (data.error) { showError(data.error); return; }
+                            setLoading(false, silent);
+                            if (data.error) {
+                                showError(data.error);
+                                return;
+                            }
                             var blockedIssues = countFlaggedIssues(data.issuesByStatus, 'blocked');
                             var flaggedIssues = countFlaggedIssues(data.issuesByStatus, 'flagged');
                             renderHealth(data.health, data.sprint, blockedIssues, flaggedIssues);
                             renderTable(data.issuesByStatus, data.sprint);
+                            markUpdated();
+                            startAutoRefresh();
                             gadgets.window.adjustHeight();
                         }, function(err) {
-                            setLoading(false);
+                            setLoading(false, silent);
                             showError('Failed to load sprint data: ' + err);
                         });
                     }
@@ -577,6 +628,7 @@
                         prefs.set('sprintId', this.value || '');
                         if (currentSprintId) loadSprintData(currentSprintId);
                         else {
+                            stopAutoRefresh();
                             healthSection.style.display = 'none';
                             tableSection.style.display = 'none';
                             gadgets.window.adjustHeight();
@@ -586,6 +638,17 @@
                     refreshBtn.addEventListener('click', function() {
                         if (currentSprintId) loadSprintData(currentSprintId);
                         else loadSprints();
+                    });
+
+                    // Refresh as soon as the tab is visible again, if the data has gone stale
+                    // while the tab was hidden.
+                    document.addEventListener('visibilitychange', function() {
+                        if (document.hidden) return;
+                        if (!currentSprintId || isLoading) return;
+                        if (!refreshIntervalSec || refreshIntervalSec <= 0) return;
+                        if (!lastUpdatedAt) return;
+                        var ageSeconds = (Date.now() - lastUpdatedAt.getTime()) / 1000;
+                        if (ageSeconds >= refreshIntervalSec) loadSprintData(currentSprintId, true);
                     });
 
                     // Initial load
@@ -600,6 +663,11 @@
                             showHealth = newPrefs.showHealth !== undefined ? newPrefs.showHealth : true;
                             showTable = newPrefs.showTable !== undefined ? newPrefs.showTable : true;
                             groupByStatus = newPrefs.groupByStatus !== undefined ? newPrefs.groupByStatus : true;
+                            if (newPrefs.refreshInterval !== undefined) {
+                                refreshIntervalSec = parseInt(newPrefs.refreshInterval, 10);
+                                if (isNaN(refreshIntervalSec)) refreshIntervalSec = 30;
+                                startAutoRefresh();
+                            }
                         }
                     });
                 })();
