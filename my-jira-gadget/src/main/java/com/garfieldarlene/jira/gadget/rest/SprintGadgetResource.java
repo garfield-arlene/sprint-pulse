@@ -25,6 +25,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -70,6 +71,9 @@ public class SprintGadgetResource {
   /** OSGi service under which the spring extender registers each plugin's application context. */
   private static final String SPRING_CONTEXT_SERVICE = "org.springframework.context.ApplicationContext";
   private static final String SPRING_CONTEXT_NAME_PROPERTY = "org.springframework.context.service.name";
+
+  /** Sprint list ordering: the running sprint first, then sprints still to come, then history. */
+  private static final List<String> SPRINT_STATE_ORDER = Arrays.asList("ACTIVE", "FUTURE", "CLOSED");
 
   /**
    * The sprint report's issue lists. Every issue scoped to the sprint appears in exactly one of
@@ -182,11 +186,78 @@ public class SprintGadgetResource {
     }
 
     /**
-     * Enumerates sprints by reading the values of the greenhopper Sprint custom
-     * field on issues the current user can see. SprintManager is not published as
-     * an OSGi service, so it cannot be injected the usual way.
+     * Lists sprints through greenhopper's own services, which includes sprints that have no
+     * issues yet and scopes the list to boards the user may see. Falls back to reading the
+     * Sprint custom field off issues if the services cannot be resolved.
      */
     private List<Object> findSprints(Long sprintId, Long boardId) {
+        List<Object> sprints = findSprintsFromServices(sprintId, boardId);
+        if (sprints != null) return sprints;
+        return findSprintsFromIssues(sprintId, boardId);
+    }
+
+    /**
+     * Resolves the sprint list through RapidViewService and SprintManager. Returns {@code null}
+     * when the greenhopper services are unavailable so the caller can fall back.
+     */
+    private List<Object> findSprintsFromServices(Long sprintId, Long boardId) {
+        try {
+            ApplicationUser user = ComponentAccessor.getComponent(JiraAuthenticationContext.class).getLoggedInUser();
+            if (user == null) return null;
+
+            Map<String, Object> beans = greenHopperBeans(
+                GREENHOPPER_RAPID_VIEW_SERVICE, GREENHOPPER_SPRINT_MANAGER);
+            Object rapidViewService = beans.get(GREENHOPPER_RAPID_VIEW_SERVICE);
+            Object sprintManager = beans.get(GREENHOPPER_SPRINT_MANAGER);
+            if (rapidViewService == null || sprintManager == null) return null;
+
+            List<Object> sprints = new ArrayList<>();
+            if (sprintId != null) {
+                // Look the sprint up directly so a sprint without issues still resolves. Board
+                // visibility is not required here: the issues are filtered by the user's search
+                // permissions anyway, exactly as before.
+                Object sprint = outcomeValue(invokeMethod(sprintManager, "getSprint", sprintId));
+                if (sprint != null && (boardId == null || boardId.equals(invokeLong(sprint, "getRapidViewId")))) {
+                    sprints.add(sprint);
+                }
+                return sprints;
+            }
+
+            List<Object> rapidViews = new ArrayList<>();
+            if (boardId != null) {
+                Object rapidView = outcomeValue(invokeMethod(rapidViewService, "getRapidView", user, boardId));
+                if (rapidView != null) rapidViews.add(rapidView);
+            } else {
+                Object visible = outcomeValue(invokeMethod(rapidViewService, "getRapidViews", user));
+                if (visible instanceof Collection) rapidViews.addAll((Collection<?>) visible);
+            }
+
+            Map<Long, Object> byId = new LinkedHashMap<>();
+            for (Object rapidView : rapidViews) {
+                Object viewSprints = outcomeValue(invokeMethod(sprintManager, "getSprintsForView", rapidView));
+                if (!(viewSprints instanceof Collection)) continue;
+                for (Object sprint : (Collection<?>) viewSprints) {
+                    Long id = invokeLong(sprint, "getId");
+                    if (id == null || id == 0L) continue;
+                    byId.putIfAbsent(id, sprint);
+                }
+            }
+            sprints.addAll(byId.values());
+            sprints.sort(this::compareSprints);
+            return sprints;
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING,
+                "Could not list sprints through greenhopper, falling back to issue values", e);
+            return null;
+        }
+    }
+
+    /**
+     * Older fallback that reads the values of the greenhopper Sprint custom field on issues the
+     * current user can see. It misses sprints without issues, so it only runs when the services
+     * are not available.
+     */
+    private List<Object> findSprintsFromIssues(Long sprintId, Long boardId) {
         Map<Long, Object> byId = new TreeMap<>();
         try {
             JiraAuthenticationContext authContext = ComponentAccessor.getComponent(JiraAuthenticationContext.class);
@@ -213,9 +284,24 @@ public class SprintGadgetResource {
                 }
             }
         } catch (Exception e) {
-            LOG.log(java.util.logging.Level.WARNING, "findSprints failed", e);
+            LOG.log(java.util.logging.Level.WARNING, "findSprintsFromIssues failed", e);
         }
         return new ArrayList<>(byId.values());
+    }
+
+    /**
+     * Current sprint first, then future, then closed; within a state by sequence, so the list
+     * opens on the sprint users care about and keeps later sprints in planning order.
+     */
+    private int compareSprints(Object left, Object right) {
+        int byState = Integer.compare(sprintStateRank(left), sprintStateRank(right));
+        if (byState != 0) return byState;
+        return Long.compare(invokeLong(left, "getSequence"), invokeLong(right, "getSequence"));
+    }
+
+    private int sprintStateRank(Object sprint) {
+        int index = SPRINT_STATE_ORDER.indexOf(invokeEnumName(sprint, "getState"));
+        return index < 0 ? SPRINT_STATE_ORDER.size() : index;
     }
 
     private CustomField getSprintCustomField() {
