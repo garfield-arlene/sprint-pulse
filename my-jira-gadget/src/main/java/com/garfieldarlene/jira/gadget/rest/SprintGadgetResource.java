@@ -11,6 +11,7 @@ import com.atlassian.jira.issue.search.SearchResults;
 import com.atlassian.jira.security.JiraAuthenticationContext;
 import com.atlassian.jira.user.ApplicationUser;
 import com.atlassian.jira.web.bean.PagerFilter;
+import com.atlassian.plugin.Plugin;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -18,6 +19,7 @@ import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -35,6 +37,10 @@ import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.ServiceReference;
 import java.util.Arrays;
 
 /**
@@ -50,6 +56,20 @@ public class SprintGadgetResource {
 
   private static final String STORY_POINTS_CF_NAME = "Story Points";
   private static final String STORY_POINTS_CF_ALT = "Story Point Estimate";
+
+  /** GreenHopper plugin whose sprint report is reused, and types that live in its bundle. */
+  private static final String GREENHOPPER_PLUGIN_KEY = "com.pyxis.greenhopper.jira";
+  private static final String GREENHOPPER_HISTORIC_SPRINT_DATA_FACTORY =
+      "com.atlassian.greenhopper.web.rapid.chart.HistoricSprintDataFactory";
+  private static final String GREENHOPPER_RAPID_VIEW_SERVICE =
+      "com.atlassian.greenhopper.service.rapid.view.RapidViewService";
+  private static final String GREENHOPPER_SPRINT_MANAGER =
+      "com.atlassian.greenhopper.service.sprint.SprintManager";
+  private static final String GREENHOPPER_MARKER_CLASS = GREENHOPPER_HISTORIC_SPRINT_DATA_FACTORY;
+
+  /** OSGi service under which the spring extender registers each plugin's application context. */
+  private static final String SPRING_CONTEXT_SERVICE = "org.springframework.context.ApplicationContext";
+  private static final String SPRING_CONTEXT_NAME_PROPERTY = "org.springframework.context.service.name";
 
   /**
    * How long a fetched greenhopper sprint report may be reused.
@@ -152,8 +172,8 @@ public class SprintGadgetResource {
 
     /**
      * Enumerates sprints by reading the values of the greenhopper Sprint custom
-     * field on issues the current user can see. SprintManager is not exported as
-     * an OSGi service, so it cannot be looked up from another plugin.
+     * field on issues the current user can see. SprintManager is not published as
+     * an OSGi service, so it cannot be injected the usual way.
      */
     private List<Object> findSprints(Long sprintId, Long boardId) {
         Map<Long, Object> byId = new TreeMap<>();
@@ -295,6 +315,237 @@ public class SprintGadgetResource {
             }
             REPORT_CACHE.remove(cacheKey, cached);
         }
+        JsonObject report = fetchSprintReportInProcess(rapidViewId, sprintId);
+        if (report == null) {
+            report = fetchSprintReportOverHttp(rapidViewId, sprintId, request);
+        }
+        if (report != null) {
+            REPORT_CACHE.put(cacheKey, new CachedSprintReport(report));
+            evictExpiredReports();
+        }
+        return report;
+    }
+
+    /**
+     * Builds the sprint report by calling GreenHopper's own service inside this JVM.
+     *
+     * <p>The greenhopper plugin does not publish its components as OSGi services, but its
+     * bundle exports the classes and its Spring application context is registered in the
+     * OSGi service registry (property {@code org.springframework.context.service.name}).
+     * Looking the context up lets the report be produced without a loopback HTTP request,
+     * which used to block for up to three seconds on the very thread rendering the gadget.
+     *
+     * <p>Returns {@code null} when the beans cannot be resolved or the user may not see the
+     * board, in which case the caller falls back to the REST endpoint.
+     */
+    private JsonObject fetchSprintReportInProcess(long rapidViewId, long sprintId) {
+        try {
+            ApplicationUser user = ComponentAccessor.getComponent(JiraAuthenticationContext.class).getLoggedInUser();
+            if (user == null) return null;
+
+            Map<String, Object> beans = greenHopperBeans(
+                GREENHOPPER_HISTORIC_SPRINT_DATA_FACTORY,
+                GREENHOPPER_RAPID_VIEW_SERVICE,
+                GREENHOPPER_SPRINT_MANAGER);
+            Object dataFactory = beans.get(GREENHOPPER_HISTORIC_SPRINT_DATA_FACTORY);
+            Object rapidViewService = beans.get(GREENHOPPER_RAPID_VIEW_SERVICE);
+            Object sprintManager = beans.get(GREENHOPPER_SPRINT_MANAGER);
+            if (dataFactory == null || rapidViewService == null || sprintManager == null) {
+                return null;
+            }
+
+            Object rapidView = outcomeValue(invokeMethod(rapidViewService, "getRapidView", user, rapidViewId));
+            Object sprint = outcomeValue(invokeMethod(sprintManager, "getSprint", sprintId));
+            if (rapidView == null || sprint == null) {
+                LOG.log(java.util.logging.Level.WARNING,
+                    "In-process sprint report: board " + rapidViewId + " or sprint " + sprintId + " not visible");
+                return null;
+            }
+
+            Object data = outcomeValue(invokeMethod(dataFactory, "getSprintOriginalContents", user, rapidView, sprint));
+            JsonObject report = toSprintReportJson(data);
+            if (report != null) {
+                LOG.log(java.util.logging.Level.FINE,
+                    "Built sprint report for board " + rapidViewId + " sprint " + sprintId + " in process");
+            }
+            return report;
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING,
+                "In-process sprint report failed, falling back to the REST endpoint", e);
+            return null;
+        }
+    }
+
+    /**
+     * Resolves beans from the Spring context of the greenhopper bundle, keyed by type name.
+     *
+     * <p>The bundle exports {@code com.atlassian.greenhopper.*} but none of its components are
+     * OSGi services, so the only way in is the application context the extender registers for
+     * the bundle. Types are named rather than imported because they live in greenhopper's
+     * class loader, where this plugin cannot cast to them. Looking up by type also avoids
+     * depending on bean names, which are an implementation detail.
+     */
+    private Map<String, Object> greenHopperBeans(String... typeNames) {
+        Map<String, Object> beans = new HashMap<>();
+        Plugin plugin = ComponentAccessor.getPluginAccessor().getPlugin(GREENHOPPER_PLUGIN_KEY);
+        if (plugin == null) {
+            LOG.log(java.util.logging.Level.WARNING,
+                "GreenHopper plugin " + GREENHOPPER_PLUGIN_KEY + " is not enabled, falling back to the REST endpoint");
+            return beans;
+        }
+        try {
+            ClassLoader loader = plugin.getClassLoader();
+            Bundle bundle = FrameworkUtil.getBundle(loader.loadClass(GREENHOPPER_MARKER_CLASS));
+            BundleContext bundleContext = bundle != null ? bundle.getBundleContext() : null;
+            if (bundleContext == null) return beans;
+
+            ServiceReference<?>[] references =
+                bundleContext.getServiceReferences(SPRING_CONTEXT_SERVICE, null);
+            if (references == null) return beans;
+            for (ServiceReference<?> reference : references) {
+                if (!bundle.getSymbolicName().equals(reference.getProperty(SPRING_CONTEXT_NAME_PROPERTY))) {
+                    continue;
+                }
+                Object springContext = bundleContext.getService(reference);
+                if (springContext == null) continue;
+                try {
+                    for (String typeName : typeNames) {
+                        Object bean = beanOfType(springContext, loader.loadClass(typeName));
+                        if (bean != null) {
+                            beans.put(typeName, bean);
+                        }
+                    }
+                } finally {
+                    bundleContext.ungetService(reference);
+                }
+                return beans;
+            }
+            LOG.log(java.util.logging.Level.WARNING,
+                "No Spring application context service found for bundle " + bundle.getSymbolicName());
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING,
+                "Could not resolve greenhopper beans " + Arrays.toString(typeNames), e);
+        }
+        return beans;
+    }
+
+    /** Returns the first bean of the given type from the greenhopper Spring context. */
+    private Object beanOfType(Object springContext, Class<?> type) throws ReflectiveOperationException {
+        Object names = invokeMethod(springContext, "getBeanNamesForType", type);
+        if (names instanceof String[] && ((String[]) names).length > 0) {
+            return invokeMethod(springContext, "getBean", ((String[]) names)[0]);
+        }
+        return null;
+    }
+
+    /**
+     * Maps greenhopper's {@code HistoricSprintData} to the subset of the sprint report JSON the
+     * gadget reads. Only the scope change figures are needed; issues and estimates come from
+     * JQL, so this is not a byte for byte copy of the REST response.
+     */
+    private JsonObject toSprintReportJson(Object data) {
+        Object contents = fieldValue(data, "contents");
+        if (contents == null) return null;
+
+        JsonObject contentsJson = new JsonObject();
+
+        Object added = fieldValue(contents, "issueKeysAddedDuringSprint");
+        if (added instanceof Map) {
+            JsonObject addedJson = new JsonObject();
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) added).entrySet()) {
+                addedJson.addProperty(String.valueOf(entry.getKey()), Boolean.TRUE.equals(entry.getValue()));
+            }
+            contentsJson.add("issueKeysAddedDuringSprint", addedJson);
+        }
+
+        Object punted = fieldValue(contents, "puntedIssues");
+        if (punted instanceof Collection) {
+            JsonArray puntedJson = new JsonArray();
+            for (Object issue : (Collection<?>) punted) {
+                JsonObject issueJson = new JsonObject();
+                Object key = fieldValue(issue, "key");
+                if (key != null) {
+                    issueJson.addProperty("key", key.toString());
+                }
+                JsonObject estimateStatistic = new JsonObject();
+                JsonObject estimate = numberValue(fieldValue(fieldValue(issue, "estimateStatistic"), "statFieldValue"));
+                if (estimate != null) {
+                    estimateStatistic.add("statFieldValue", estimate);
+                }
+                issueJson.add("estimateStatistic", estimateStatistic);
+                puntedJson.add(issueJson);
+            }
+            contentsJson.add("puntedIssues", puntedJson);
+        }
+
+        JsonObject puntedEstimateSum = numberValue(fieldValue(contents, "puntedIssuesEstimateSum"));
+        if (puntedEstimateSum != null) {
+            contentsJson.add("puntedIssuesEstimateSum", puntedEstimateSum);
+        }
+
+        JsonObject report = new JsonObject();
+        report.add("contents", contentsJson);
+        return report;
+    }
+
+    /** Mirrors greenhopper's {@code NumberFieldValue} ({value, text}) which the report reader sums. */
+    private JsonObject numberValue(Object numberFieldValue) {
+        Object value = fieldValue(numberFieldValue, "value");
+        if (!(value instanceof Number)) return null;
+        JsonObject json = new JsonObject();
+        json.addProperty("value", (Number) value);
+        Object text = fieldValue(numberFieldValue, "text");
+        if (text != null) {
+            json.addProperty("text", text.toString());
+        }
+        return json;
+    }
+
+    private Object fieldValue(Object target, String fieldName) {
+        if (target == null) return null;
+        try {
+            Field field = target.getClass().getField(fieldName);
+            return field.get(target);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Object outcomeValue(Object outcome) {
+        if (outcome == null) return null;
+        try {
+            if (Boolean.FALSE.equals(invokeMethod(outcome, "isValid"))) {
+                LOG.log(java.util.logging.Level.WARNING, "GreenHopper service returned an invalid result: " + outcome);
+                return null;
+            }
+            return invokeMethod(outcome, "getValue");
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING, "Could not read greenhopper service result", e);
+            return null;
+        }
+    }
+
+    /** Invokes a public method by name and argument types, across greenhopper's class loader. */
+    private Object invokeMethod(Object target, String methodName, Object... args) throws ReflectiveOperationException {
+        for (Method method : target.getClass().getMethods()) {
+            if (!method.getName().equals(methodName) || method.getParameterCount() != args.length) {
+                continue;
+            }
+            Class<?>[] parameterTypes = method.getParameterTypes();
+            boolean compatible = true;
+            for (int i = 0; i < args.length && compatible; i++) {
+                compatible = parameterTypes[i].isPrimitive()
+                    || args[i] == null
+                    || parameterTypes[i].isInstance(args[i]);
+            }
+            if (compatible) {
+                return method.invoke(target, args);
+            }
+        }
+        throw new NoSuchMethodException(target.getClass().getName() + "." + methodName + "/" + args.length);
+    }
+
+    private JsonObject fetchSprintReportOverHttp(long rapidViewId, long sprintId, HttpServletRequest request) {
         try {
             String baseUrl = null;
             if (request != null) {
@@ -332,12 +583,9 @@ public class SprintGadgetResource {
             String line;
             while ((line = br.readLine()) != null) sb.append(line);
             br.close();
-            JsonObject report = new JsonParser().parse(sb.toString()).getAsJsonObject();
-            REPORT_CACHE.put(cacheKey, new CachedSprintReport(report));
-            evictExpiredReports();
-            return report;
+            return new JsonParser().parse(sb.toString()).getAsJsonObject();
         } catch (Exception e) {
-            LOG.log(java.util.logging.Level.WARNING, "fetchSprintReport failed", e);
+            LOG.log(java.util.logging.Level.WARNING, "fetchSprintReportOverHttp failed", e);
             return null;
         }
     }
