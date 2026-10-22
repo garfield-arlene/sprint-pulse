@@ -72,6 +72,17 @@ public class SprintGadgetResource {
   private static final String SPRING_CONTEXT_NAME_PROPERTY = "org.springframework.context.service.name";
 
   /**
+   * The sprint report's issue lists. Every issue scoped to the sprint appears in exactly one of
+   * them, so together they also cover an issue that was added and later removed.
+   */
+  private static final String[] SPRINT_REPORT_ISSUE_LISTS = {
+      "completedIssues",
+      "issuesNotCompletedInCurrentSprint",
+      "puntedIssues",
+      "issuesCompletedInAnotherSprint"
+  };
+
+  /**
    * How long a fetched greenhopper sprint report may be reused.
    *
    * <p>The report is the only source of the scope change figures (issues added to and removed
@@ -267,9 +278,12 @@ public class SprintGadgetResource {
             JsonObject contents = report.getAsJsonObject("contents");
             if (contents.has("issueKeysAddedDuringSprint") && contents.get("issueKeysAddedDuringSprint").isJsonObject()) {
                 JsonObject addedKeys = contents.getAsJsonObject("issueKeysAddedDuringSprint");
+                Map<String, Double> reportPoints = reportEstimates(contents);
                 addedIssues = addedKeys.entrySet().size();
-                for (Map.Entry<String, JsonElement> e : addedKeys.entrySet()) {
-                    Double sp = spByKey.get(e.getKey());
+                for (String key : addedKeys.keySet()) {
+                    // The report covers issues that were added and later removed; the current
+                    // sprint does not, so prefer the report and fall back to the sprint issues.
+                    Double sp = reportPoints.containsKey(key) ? reportPoints.get(key) : spByKey.get(key);
                     if (sp != null) added += sp;
                 }
             }
@@ -458,24 +472,8 @@ public class SprintGadgetResource {
             contentsJson.add("issueKeysAddedDuringSprint", addedJson);
         }
 
-        Object punted = fieldValue(contents, "puntedIssues");
-        if (punted instanceof Collection) {
-            JsonArray puntedJson = new JsonArray();
-            for (Object issue : (Collection<?>) punted) {
-                JsonObject issueJson = new JsonObject();
-                Object key = fieldValue(issue, "key");
-                if (key != null) {
-                    issueJson.addProperty("key", key.toString());
-                }
-                JsonObject estimateStatistic = new JsonObject();
-                JsonObject estimate = numberValue(fieldValue(fieldValue(issue, "estimateStatistic"), "statFieldValue"));
-                if (estimate != null) {
-                    estimateStatistic.add("statFieldValue", estimate);
-                }
-                issueJson.add("estimateStatistic", estimateStatistic);
-                puntedJson.add(issueJson);
-            }
-            contentsJson.add("puntedIssues", puntedJson);
+        for (String issueList : SPRINT_REPORT_ISSUE_LISTS) {
+            contentsJson.add(issueList, issueListJson(contents, issueList));
         }
 
         JsonObject puntedEstimateSum = numberValue(fieldValue(contents, "puntedIssuesEstimateSum"));
@@ -486,6 +484,32 @@ public class SprintGadgetResource {
         JsonObject report = new JsonObject();
         report.add("contents", contentsJson);
         return report;
+    }
+
+    /**
+     * Maps one of the report's issue lists to JSON with the key and estimate, which is all the
+     * health calculation needs. The report groups every scoped issue into exactly one of these
+     * lists, so together they cover issues that were added and later removed as well.
+     */
+    private JsonArray issueListJson(Object contents, String fieldName) {
+        JsonArray issuesJson = new JsonArray();
+        Object issues = fieldValue(contents, fieldName);
+        if (!(issues instanceof Collection)) return issuesJson;
+        for (Object issue : (Collection<?>) issues) {
+            JsonObject issueJson = new JsonObject();
+            Object key = fieldValue(issue, "key");
+            if (key != null) {
+                issueJson.addProperty("key", key.toString());
+            }
+            JsonObject estimateStatistic = new JsonObject();
+            JsonObject estimate = numberValue(fieldValue(fieldValue(issue, "estimateStatistic"), "statFieldValue"));
+            if (estimate != null) {
+                estimateStatistic.add("statFieldValue", estimate);
+            }
+            issueJson.add("estimateStatistic", estimateStatistic);
+            issuesJson.add(issueJson);
+        }
+        return issuesJson;
     }
 
     /** Mirrors greenhopper's {@code NumberFieldValue} ({value, text}) which the report reader sums. */
@@ -617,6 +641,30 @@ public class SprintGadgetResource {
             }
         }
         return 0;
+    }
+
+    /**
+     * Story points for every issue the sprint report knows about, keyed by issue key. An issue
+     * that was added after the sprint started and then removed is no longer part of the sprint,
+     * so its points are only available here.
+     */
+    private Map<String, Double> reportEstimates(JsonObject contents) {
+        Map<String, Double> estimates = new HashMap<>();
+        for (String issueList : SPRINT_REPORT_ISSUE_LISTS) {
+            JsonElement list = contents.get(issueList);
+            if (list == null || !list.isJsonArray()) continue;
+            for (JsonElement element : list.getAsJsonArray()) {
+                if (!element.isJsonObject()) continue;
+                JsonObject issue = element.getAsJsonObject();
+                if (!issue.has("key") || issue.get("key").isJsonNull()) continue;
+                double points = 0;
+                if (issue.has("estimateStatistic") && issue.get("estimateStatistic").isJsonObject()) {
+                    points = sumEstimate(issue.getAsJsonObject("estimateStatistic").get("statFieldValue"));
+                }
+                estimates.put(issue.get("key").getAsString(), points);
+            }
+        }
+        return estimates;
     }
 
     private JsonObject buildIssuesByStatusJson(Object sprint) {
