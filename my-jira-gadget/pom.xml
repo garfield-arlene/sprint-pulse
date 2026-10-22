@@ -6,7 +6,7 @@
 
     <groupId>com.garfieldArlene.jira.gadget</groupId>
     <artifactId>sprint-pulse</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>3.0.0-SNAPSHOT</version>
     <packaging>atlassian-plugin</packaging>
 
     <name>Sprint Pulse</name>
