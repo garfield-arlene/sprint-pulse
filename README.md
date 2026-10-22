@@ -60,7 +60,7 @@ Copy the JAR into `<jira-home>/plugins/installed-plugins/` and restart Jira.
 
 1. Open or create a dashboard and choose **Add gadget**.
 2. Search for **Sprint Pulse** and add it.
-3. Optionally open the gadget's edit/configuration dialog and set a **Board ID** to limit the sprint list to a single board.
+3. Optionally pick a board from the dropdown next to the sprint list to limit it to a single board (also settable as **Board ID** in the configuration dialog). `All boards` lists sprints from every board you can see.
 4. Select a sprint from the dropdown. It lists the running sprint, sprints still to come, and the 20 most recent closed sprints on the visible boards. The gadget loads health metrics and issues automatically.
 5. Click **Refresh** to reload the selected sprint on demand. By default the gadget also refreshes itself every 30 seconds; the last-updated time next to the button shows when the data was fetched. The dropdown next to the button sets the refresh interval (`Auto off`, `Every 30s`, `Every 1m`, `Every 5m`) and is remembered per user.
 
@@ -69,7 +69,7 @@ The selected sprint is saved as a gadget preference. Other preferences (shown in
 | Preference | Default | Purpose |
 | --- | --- | --- |
 | Sprint | none | Sprint to display |
-| Board ID | empty | Filter available sprints to one rapid view/board |
+| Board ID | empty | Filter available sprints to one rapid view/board; also changeable from the board dropdown in the gadget |
 | Show Health Summary | `true` | Show or hide the health metric cards |
 | Show Issues Table | `true` | Show or hide the issues table |
 | Group by Status | `true` | Group issues by workflow status (grouping is currently always applied) |
@@ -93,6 +93,7 @@ The gadget is backed by a REST module at `/rest/sprint/1.0`.
 
 | Method | Path | Query parameters | Description |
 | --- | --- | --- | --- |
+| `GET` | `/rest/sprint/1.0/boards` | – | Boards with sprint support that the user can see, sorted by name |
 | `GET` | `/rest/sprint/1.0/sprints` | `boardId` (optional) | Active and future sprints plus the 20 most recent closed ones, on boards the user can see |
 | `GET` | `/rest/sprint/1.0/data` | `sprintId` or `boardId` | Sprint, health metrics, and issues grouped by status |
 
