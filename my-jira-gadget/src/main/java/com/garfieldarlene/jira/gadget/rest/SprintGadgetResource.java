@@ -168,6 +168,67 @@ public class SprintGadgetResource {
         return Response.ok(result.toString()).build();
     }
 
+    @GET
+    @Path("/boards")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getBoards() {
+        JsonObject result = new JsonObject();
+        result.add("boards", getAvailableBoards());
+        return Response.ok(result.toString()).build();
+    }
+
+    /**
+     * Boards the current user may see that support sprints, sorted by name. Used by the gadget's
+     * board selector; an empty list means the filter is not available and the gadget lists
+     * sprints from every board.
+     */
+    private JsonArray getAvailableBoards() {
+        JsonArray array = new JsonArray();
+        for (Object board : findBoards()) {
+            JsonObject json = new JsonObject();
+            json.addProperty("id", invokeLong(board, "getId"));
+            json.addProperty("name", invokeString(board, "getName"));
+            array.add(json);
+        }
+        return array;
+    }
+
+    private List<Object> findBoards() {
+        List<Object> boards = new ArrayList<>();
+        try {
+            ApplicationUser user = ComponentAccessor.getComponent(JiraAuthenticationContext.class).getLoggedInUser();
+            if (user == null) return boards;
+
+            Object rapidViewService = greenHopperBeans(GREENHOPPER_RAPID_VIEW_SERVICE)
+                .get(GREENHOPPER_RAPID_VIEW_SERVICE);
+            if (rapidViewService == null) return boards;
+
+            Object visible = outcomeValue(invokeMethod(rapidViewService, "getRapidViews", user));
+            if (!(visible instanceof Collection)) return boards;
+
+            for (Object board : (Collection<?>) visible) {
+                if (invokeLong(board, "getId") == 0L) continue;
+                if (!sprintSupportEnabled(board)) continue;
+                boards.add(board);
+            }
+            boards.sort((left, right) ->
+                invokeString(left, "getName").compareToIgnoreCase(invokeString(right, "getName")));
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING, "Could not list boards through greenhopper", e);
+        }
+        return boards;
+    }
+
+    /** Kanban and other non-sprint boards are skipped when their type can be determined. */
+    private boolean sprintSupportEnabled(Object board) {
+        try {
+            Object enabled = invokeMethod(board, "isSprintSupportEnabled");
+            return !(enabled instanceof Boolean) || (Boolean) enabled;
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
     private Object getSprint(Long sprintId, Long boardId) {
         List<Object> sprints = findSprints(sprintId, boardId);
         return sprints.isEmpty() ? null : sprints.get(0);

@@ -52,6 +52,7 @@
                 .sprint-selector { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
                 .sprint-selector select { flex: 1; min-width: 200px; padding: 6px 10px; border: 1px solid #dfe1e6; border-radius: 3px; font-size: 13px; background: #fff; }
                 .sprint-selector select:focus { outline: none; border-color: #0052cc; box-shadow: 0 0 0 2px rgba(0,82,204,0.2); }
+                .sprint-selector select.board-select { flex: 0 1 auto; min-width: 150px; max-width: 220px; }
                 .refresh-btn { padding: 6px 12px; background: #0052cc; color: #fff; border: none; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap; }
                 .refresh-btn:hover { background: #0065ff; }
                 .refresh-btn:disabled { background: #a5adba; cursor: not-allowed; }
@@ -171,6 +172,9 @@
                 <div class="section">
                     <div class="section-content" style="padding: 12px 16px;">
                         <div class="sprint-selector">
+                            <select id="boardSelect" class="board-select" aria-label="Select Board" title="Select Board" style="display:none;">
+                                <option value="">All boards</option>
+                            </select>
                             <select id="sprintSelect" aria-label="Select Sprint">
                                 <option value="">Loading sprints...</option>
                             </select>
@@ -250,6 +254,7 @@
                         baseUrl = window.location.origin + (i > 0 ? p.substring(0, i) : '');
                     }
                     var prefs = new gadgets.Prefs();
+                    var boardSelect = document.getElementById('boardSelect');
                     var sprintSelect = document.getElementById('sprintSelect');
                     var refreshBtn = document.getElementById('refreshBtn');
                     var intervalSelect = document.getElementById('refreshIntervalSelect');
@@ -432,23 +437,88 @@
                         }).catch(function(err) { onError('Request failed: ' + err.message); });
                     }
 
+                    // The dashboard does not always give access to the gadget's configuration
+                    // form, so the board is also selectable in the gadget itself. The list is
+                    // optional: if it cannot be loaded, sprints from every board are shown.
+                    function loadBoards() {
+                        if (!boardSelect) {
+                            loadSprints();
+                            return;
+                        }
+                        ajaxGet(baseUrl + '/rest/sprint/1.0/boards', function(data) {
+                            var boards = data.boards || [];
+                            boardSelect.innerHTML = '';
+                            var allOption = document.createElement('option');
+                            allOption.value = '';
+                            allOption.textContent = 'All boards';
+                            boardSelect.appendChild(allOption);
+                            boards.forEach(function(board) {
+                                var opt = document.createElement('option');
+                                opt.value = String(board.id);
+                                opt.textContent = board.name;
+                                boardSelect.appendChild(opt);
+                            });
+
+                            // A stored board that is gone or not visible (for example a kanban
+                            // board) falls back to all boards.
+                            if (currentBoardId && !hasOption(boardSelect, String(currentBoardId))) {
+                                currentBoardId = null;
+                                try { prefs.set('boardId', ''); } catch (e) { /* not persisted */ }
+                            }
+                            boardSelect.value = currentBoardId ? String(currentBoardId) : '';
+                            // With a single board the filter cannot change anything.
+                            boardSelect.style.display = boards.length > 1 ? '' : 'none';
+                            loadSprints();
+                            gadgets.window.adjustHeight();
+                        }, function() {
+                            if (boardSelect) boardSelect.style.display = 'none';
+                            loadSprints();
+                        });
+                    }
+
+                    function hasOption(select, value) {
+                        for (var i = 0; i < select.options.length; i++) {
+                            if (select.options[i].value === value) return true;
+                        }
+                        return false;
+                    }
+
                     function loadSprints() {
                         var boardId = currentBoardId ? parseInt(currentBoardId) : null;
                         var url = baseUrl + '/rest/sprint/1.0/sprints' + (boardId ? '?boardId=' + boardId : '');
 
                         ajaxGet(url, function(data) {
                             var sprints = data.sprints || [];
+                            var previousSprintId = currentSprintId;
                             sprintSelect.innerHTML = '<option value="">Select a sprint...</option>';
+                            var selected = null;
                             sprints.forEach(function(sprint) {
                                 var opt = document.createElement('option');
-                                opt.value = sprint.id;
+                                opt.value = String(sprint.id);
                                 var dateStr = sprint.startDate ? new Date(sprint.startDate).toLocaleDateString() : '';
                                 var endStr = sprint.endDate ? new Date(sprint.endDate).toLocaleDateString() : '';
                                 opt.textContent = sprint.name + (dateStr ? ' (' + dateStr + ' → ' + endStr + ')' : '') + ' [' + sprint.state + ']';
-                                if (currentSprintId && currentSprintId == sprint.id) opt.selected = true;
+                                if (currentSprintId && currentSprintId == sprint.id) selected = sprint;
                                 sprintSelect.appendChild(opt);
                             });
-                            if (currentSprintId) loadSprintData(currentSprintId);
+
+                            // Keep the selected sprint when it is still available, otherwise
+                            // fall back to the first one (the running sprint) so switching
+                            // boards always shows data.
+                            if (!selected && sprints.length > 0) selected = sprints[0];
+                            if (selected) {
+                                currentSprintId = selected.id;
+                                sprintSelect.value = String(currentSprintId);
+                                if (String(previousSprintId) !== String(currentSprintId)) {
+                                    try { prefs.set('sprintId', String(currentSprintId)); } catch (e) { /* not persisted */ }
+                                }
+                                loadSprintData(currentSprintId);
+                            } else {
+                                currentSprintId = null;
+                                stopAutoRefresh();
+                                healthSection.style.display = 'none';
+                                tableSection.style.display = 'none';
+                            }
                             gadgets.window.adjustHeight();
                         }, function(err) {
                             sprintSelect.innerHTML = '<option value="">Failed to load sprints</option>';
@@ -664,6 +734,18 @@
                         }
                     });
 
+                    if (boardSelect) {
+                        boardSelect.addEventListener('change', function() {
+                            currentBoardId = this.value ? this.value : null;
+                            try { prefs.set('boardId', this.value || ''); } catch (e) { /* not persisted */ }
+                            stopAutoRefresh();
+                            healthSection.style.display = 'none';
+                            tableSection.style.display = 'none';
+                            sprintSelect.innerHTML = '<option value="">Loading sprints...</option>';
+                            loadSprints();
+                        });
+                    }
+
                     if (intervalSelect) {
                         intervalSelect.addEventListener('change', function() {
                             applyInterval(this.value, true);
@@ -687,20 +769,26 @@
                     });
 
                     // Initial load
-                    loadSprints();
+                    loadBoards();
 
                     // Auto-refresh prefs
                     window.addEventListener('message', function(event) {
                         if (event.data && event.data.gadget && event.data.gadget.prefs) {
                             var newPrefs = event.data.gadget.prefs;
+                            var boardChanged = false;
                             if (newPrefs.sprintId !== undefined) currentSprintId = newPrefs.sprintId ? parseInt(newPrefs.sprintId) : null;
-                            if (newPrefs.boardId !== undefined) currentBoardId = newPrefs.boardId || null;
+                            if (newPrefs.boardId !== undefined) {
+                                var nextBoardId = newPrefs.boardId || null;
+                                boardChanged = String(nextBoardId || '') !== String(currentBoardId || '');
+                                currentBoardId = nextBoardId;
+                            }
                             showHealth = newPrefs.showHealth !== undefined ? newPrefs.showHealth : true;
                             showTable = newPrefs.showTable !== undefined ? newPrefs.showTable : true;
                             groupByStatus = newPrefs.groupByStatus !== undefined ? newPrefs.groupByStatus : true;
                             if (newPrefs.refreshInterval !== undefined) {
                                 applyInterval(newPrefs.refreshInterval, false);
                             }
+                            if (boardChanged) loadBoards();
                         }
                     });
                 })();
