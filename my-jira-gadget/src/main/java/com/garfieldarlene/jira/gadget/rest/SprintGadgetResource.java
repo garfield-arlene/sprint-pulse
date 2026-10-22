@@ -11,6 +11,7 @@ import com.atlassian.jira.issue.search.SearchResults;
 import com.atlassian.jira.security.JiraAuthenticationContext;
 import com.atlassian.jira.user.ApplicationUser;
 import com.atlassian.jira.web.bean.PagerFilter;
+import com.atlassian.plugin.Plugin;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -18,11 +19,13 @@ import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -35,6 +38,10 @@ import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.ServiceReference;
 import java.util.Arrays;
 
 /**
@@ -50,6 +57,68 @@ public class SprintGadgetResource {
 
   private static final String STORY_POINTS_CF_NAME = "Story Points";
   private static final String STORY_POINTS_CF_ALT = "Story Point Estimate";
+
+  /** GreenHopper plugin whose sprint report is reused, and types that live in its bundle. */
+  private static final String GREENHOPPER_PLUGIN_KEY = "com.pyxis.greenhopper.jira";
+  private static final String GREENHOPPER_HISTORIC_SPRINT_DATA_FACTORY =
+      "com.atlassian.greenhopper.web.rapid.chart.HistoricSprintDataFactory";
+  private static final String GREENHOPPER_RAPID_VIEW_SERVICE =
+      "com.atlassian.greenhopper.service.rapid.view.RapidViewService";
+  private static final String GREENHOPPER_SPRINT_MANAGER =
+      "com.atlassian.greenhopper.service.sprint.SprintManager";
+  private static final String GREENHOPPER_MARKER_CLASS = GREENHOPPER_HISTORIC_SPRINT_DATA_FACTORY;
+
+  /** OSGi service under which the spring extender registers each plugin's application context. */
+  private static final String SPRING_CONTEXT_SERVICE = "org.springframework.context.ApplicationContext";
+  private static final String SPRING_CONTEXT_NAME_PROPERTY = "org.springframework.context.service.name";
+
+  /** Sprint list ordering: the running sprint first, then sprints still to come, then history. */
+  private static final List<String> SPRINT_STATE_ORDER = Arrays.asList("ACTIVE", "FUTURE", "CLOSED");
+
+  /** How much closed sprint history the list keeps; older sprints only bloat the dropdown. */
+  private static final int MAX_CLOSED_SPRINTS = 20;
+
+  /**
+   * The sprint report's issue lists. Every issue scoped to the sprint appears in exactly one of
+   * them, so together they also cover an issue that was added and later removed.
+   */
+  private static final String[] SPRINT_REPORT_ISSUE_LISTS = {
+      "completedIssues",
+      "issuesNotCompletedInCurrentSprint",
+      "puntedIssues",
+      "issuesCompletedInAnotherSprint"
+  };
+
+  /**
+   * How long a fetched greenhopper sprint report may be reused.
+   *
+   * <p>The report is the only source of the scope change figures (issues added to and removed
+   * from the sprint), so a cached copy that never expires freezes those numbers for the life
+   * of the plugin: a story added to or moved out of the sprint keeps the old counts. Every
+   * cached entry therefore carries a timestamp and is discarded once it is older than this
+   * TTL, which bounds how stale the gadget can ever show data.
+   */
+  private static final long REPORT_CACHE_TTL_MILLIS = 30_000L;
+
+  /** Upper bound on cached reports, so many sprints cannot grow the cache without limit. */
+  private static final int REPORT_CACHE_MAX_ENTRIES = 20;
+
+  private static final java.util.concurrent.ConcurrentMap<String, CachedSprintReport> REPORT_CACHE =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
+  private static final class CachedSprintReport {
+    private final JsonObject report;
+    private final long fetchedAt;
+
+    CachedSprintReport(JsonObject report) {
+      this.report = report;
+      this.fetchedAt = System.currentTimeMillis();
+    }
+
+    boolean isExpired() {
+      return System.currentTimeMillis() - fetchedAt >= REPORT_CACHE_TTL_MILLIS;
+    }
+  }
 
   private static final java.util.logging.Logger LOG =
       java.util.logging.Logger.getLogger("com.garfieldarlene.sprintgadget");
@@ -120,11 +189,80 @@ public class SprintGadgetResource {
     }
 
     /**
-     * Enumerates sprints by reading the values of the greenhopper Sprint custom
-     * field on issues the current user can see. SprintManager is not exported as
-     * an OSGi service, so it cannot be looked up from another plugin.
+     * Lists sprints through greenhopper's own services, which includes sprints that have no
+     * issues yet and scopes the list to boards the user may see. Falls back to reading the
+     * Sprint custom field off issues if the services cannot be resolved. List results are
+     * ordered for the dropdown and trimmed to the recent closed sprints; single lookups are not.
      */
     private List<Object> findSprints(Long sprintId, Long boardId) {
+        List<Object> sprints = findSprintsFromServices(sprintId, boardId);
+        if (sprints == null) sprints = findSprintsFromIssues(sprintId, boardId);
+        if (sprintId != null) return sprints;
+        sprints.sort(this::compareSprints);
+        return limitClosedSprints(sprints);
+    }
+
+    /**
+     * Resolves the sprint list through RapidViewService and SprintManager. Returns {@code null}
+     * when the greenhopper services are unavailable so the caller can fall back.
+     */
+    private List<Object> findSprintsFromServices(Long sprintId, Long boardId) {
+        try {
+            ApplicationUser user = ComponentAccessor.getComponent(JiraAuthenticationContext.class).getLoggedInUser();
+            if (user == null) return null;
+
+            Map<String, Object> beans = greenHopperBeans(
+                GREENHOPPER_RAPID_VIEW_SERVICE, GREENHOPPER_SPRINT_MANAGER);
+            Object rapidViewService = beans.get(GREENHOPPER_RAPID_VIEW_SERVICE);
+            Object sprintManager = beans.get(GREENHOPPER_SPRINT_MANAGER);
+            if (rapidViewService == null || sprintManager == null) return null;
+
+            List<Object> sprints = new ArrayList<>();
+            if (sprintId != null) {
+                // Look the sprint up directly so a sprint without issues still resolves. Board
+                // visibility is not required here: the issues are filtered by the user's search
+                // permissions anyway, exactly as before.
+                Object sprint = outcomeValue(invokeMethod(sprintManager, "getSprint", sprintId));
+                if (sprint != null && (boardId == null || boardId.equals(invokeLong(sprint, "getRapidViewId")))) {
+                    sprints.add(sprint);
+                }
+                return sprints;
+            }
+
+            List<Object> rapidViews = new ArrayList<>();
+            if (boardId != null) {
+                Object rapidView = outcomeValue(invokeMethod(rapidViewService, "getRapidView", user, boardId));
+                if (rapidView != null) rapidViews.add(rapidView);
+            } else {
+                Object visible = outcomeValue(invokeMethod(rapidViewService, "getRapidViews", user));
+                if (visible instanceof Collection) rapidViews.addAll((Collection<?>) visible);
+            }
+
+            Map<Long, Object> byId = new LinkedHashMap<>();
+            for (Object rapidView : rapidViews) {
+                Object viewSprints = outcomeValue(invokeMethod(sprintManager, "getSprintsForView", rapidView));
+                if (!(viewSprints instanceof Collection)) continue;
+                for (Object sprint : (Collection<?>) viewSprints) {
+                    Long id = invokeLong(sprint, "getId");
+                    if (id == null || id == 0L) continue;
+                    byId.putIfAbsent(id, sprint);
+                }
+            }
+            sprints.addAll(byId.values());
+            return sprints;
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING,
+                "Could not list sprints through greenhopper, falling back to issue values", e);
+            return null;
+        }
+    }
+
+    /**
+     * Older fallback that reads the values of the greenhopper Sprint custom field on issues the
+     * current user can see. It misses sprints without issues, so it only runs when the services
+     * are not available.
+     */
+    private List<Object> findSprintsFromIssues(Long sprintId, Long boardId) {
         Map<Long, Object> byId = new TreeMap<>();
         try {
             JiraAuthenticationContext authContext = ComponentAccessor.getComponent(JiraAuthenticationContext.class);
@@ -151,9 +289,58 @@ public class SprintGadgetResource {
                 }
             }
         } catch (Exception e) {
-            LOG.log(java.util.logging.Level.WARNING, "findSprints failed", e);
+            LOG.log(java.util.logging.Level.WARNING, "findSprintsFromIssues failed", e);
         }
         return new ArrayList<>(byId.values());
+    }
+
+    /**
+     * Running sprint first, then future ones in planned start order, then closed ones newest
+     * first, so the list opens on the current sprint and the retained history is the recent one.
+     * Sequence numbers are per board, so they cannot order sprints from several boards.
+     */
+    private int compareSprints(Object left, Object right) {
+        int byState = Integer.compare(sprintStateRank(left), sprintStateRank(right));
+        if (byState != 0) return byState;
+        if ("CLOSED".equals(invokeEnumName(left, "getState"))) {
+            return Long.compare(sprintEndTime(right), sprintEndTime(left));
+        }
+        return Long.compare(sprintStartTime(left), sprintStartTime(right));
+    }
+
+    private int sprintStateRank(Object sprint) {
+        int index = SPRINT_STATE_ORDER.indexOf(invokeEnumName(sprint, "getState"));
+        return index < 0 ? SPRINT_STATE_ORDER.size() : index;
+    }
+
+    /**
+     * Keeps only the most recent closed sprints. Discovery returns the whole history of every
+     * visible board, which on a long-lived instance would fill the dropdown with old sprints.
+     * The list must already be sorted newest first.
+     */
+    private List<Object> limitClosedSprints(List<Object> sprints) {
+        List<Object> limited = new ArrayList<>();
+        int closed = 0;
+        for (Object sprint : sprints) {
+            if ("CLOSED".equals(invokeEnumName(sprint, "getState"))
+                && ++closed > MAX_CLOSED_SPRINTS) {
+                continue;
+            }
+            limited.add(sprint);
+        }
+        return limited;
+    }
+
+    /** Start time in millis, or the end of time so undated future sprints sort last. */
+    private long sprintStartTime(Object sprint) {
+        long start = invokeDateTime(sprint, "getStartDate");
+        return start != 0L ? start : Long.MAX_VALUE;
+    }
+
+    /** End time in millis, falling back to the completion time for sprints closed without one. */
+    private long sprintEndTime(Object sprint) {
+        long end = invokeDateTime(sprint, "getEndDate");
+        return end != 0L ? end : invokeDateTime(sprint, "getCompleteDate");
     }
 
     private CustomField getSprintCustomField() {
@@ -216,9 +403,12 @@ public class SprintGadgetResource {
             JsonObject contents = report.getAsJsonObject("contents");
             if (contents.has("issueKeysAddedDuringSprint") && contents.get("issueKeysAddedDuringSprint").isJsonObject()) {
                 JsonObject addedKeys = contents.getAsJsonObject("issueKeysAddedDuringSprint");
+                Map<String, Double> reportPoints = reportEstimates(contents);
                 addedIssues = addedKeys.entrySet().size();
-                for (Map.Entry<String, JsonElement> e : addedKeys.entrySet()) {
-                    Double sp = spByKey.get(e.getKey());
+                for (String key : addedKeys.keySet()) {
+                    // The report covers issues that were added and later removed; the current
+                    // sprint does not, so prefer the report and fall back to the sprint issues.
+                    Double sp = reportPoints.containsKey(key) ? reportPoints.get(key) : spByKey.get(key);
                     if (sp != null) added += sp;
                 }
             }
@@ -256,6 +446,255 @@ public class SprintGadgetResource {
 
     private JsonObject fetchSprintReport(long rapidViewId, long sprintId, HttpServletRequest request) {
         if (rapidViewId == 0 || sprintId == 0) return null;
+        String cacheKey = rapidViewId + ":" + sprintId;
+        CachedSprintReport cached = REPORT_CACHE.get(cacheKey);
+        if (cached != null) {
+            if (!cached.isExpired()) {
+                return cached.report;
+            }
+            REPORT_CACHE.remove(cacheKey, cached);
+        }
+        JsonObject report = fetchSprintReportInProcess(rapidViewId, sprintId);
+        if (report == null) {
+            report = fetchSprintReportOverHttp(rapidViewId, sprintId, request);
+        }
+        if (report != null) {
+            REPORT_CACHE.put(cacheKey, new CachedSprintReport(report));
+            evictExpiredReports();
+        }
+        return report;
+    }
+
+    /**
+     * Builds the sprint report by calling GreenHopper's own service inside this JVM.
+     *
+     * <p>The greenhopper plugin does not publish its components as OSGi services, but its
+     * bundle exports the classes and its Spring application context is registered in the
+     * OSGi service registry (property {@code org.springframework.context.service.name}).
+     * Looking the context up lets the report be produced without a loopback HTTP request,
+     * which used to block for up to three seconds on the very thread rendering the gadget.
+     *
+     * <p>Returns {@code null} when the beans cannot be resolved or the user may not see the
+     * board, in which case the caller falls back to the REST endpoint.
+     */
+    private JsonObject fetchSprintReportInProcess(long rapidViewId, long sprintId) {
+        try {
+            ApplicationUser user = ComponentAccessor.getComponent(JiraAuthenticationContext.class).getLoggedInUser();
+            if (user == null) return null;
+
+            Map<String, Object> beans = greenHopperBeans(
+                GREENHOPPER_HISTORIC_SPRINT_DATA_FACTORY,
+                GREENHOPPER_RAPID_VIEW_SERVICE,
+                GREENHOPPER_SPRINT_MANAGER);
+            Object dataFactory = beans.get(GREENHOPPER_HISTORIC_SPRINT_DATA_FACTORY);
+            Object rapidViewService = beans.get(GREENHOPPER_RAPID_VIEW_SERVICE);
+            Object sprintManager = beans.get(GREENHOPPER_SPRINT_MANAGER);
+            if (dataFactory == null || rapidViewService == null || sprintManager == null) {
+                return null;
+            }
+
+            Object rapidView = outcomeValue(invokeMethod(rapidViewService, "getRapidView", user, rapidViewId));
+            Object sprint = outcomeValue(invokeMethod(sprintManager, "getSprint", sprintId));
+            if (rapidView == null || sprint == null) {
+                LOG.log(java.util.logging.Level.WARNING,
+                    "In-process sprint report: board " + rapidViewId + " or sprint " + sprintId + " not visible");
+                return null;
+            }
+
+            Object data = outcomeValue(invokeMethod(dataFactory, "getSprintOriginalContents", user, rapidView, sprint));
+            JsonObject report = toSprintReportJson(data);
+            if (report != null) {
+                LOG.log(java.util.logging.Level.FINE,
+                    "Built sprint report for board " + rapidViewId + " sprint " + sprintId + " in process");
+            }
+            return report;
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING,
+                "In-process sprint report failed, falling back to the REST endpoint", e);
+            return null;
+        }
+    }
+
+    /**
+     * Resolves beans from the Spring context of the greenhopper bundle, keyed by type name.
+     *
+     * <p>The bundle exports {@code com.atlassian.greenhopper.*} but none of its components are
+     * OSGi services, so the only way in is the application context the extender registers for
+     * the bundle. Types are named rather than imported because they live in greenhopper's
+     * class loader, where this plugin cannot cast to them. Looking up by type also avoids
+     * depending on bean names, which are an implementation detail.
+     */
+    private Map<String, Object> greenHopperBeans(String... typeNames) {
+        Map<String, Object> beans = new HashMap<>();
+        Plugin plugin = ComponentAccessor.getPluginAccessor().getPlugin(GREENHOPPER_PLUGIN_KEY);
+        if (plugin == null) {
+            LOG.log(java.util.logging.Level.WARNING,
+                "GreenHopper plugin " + GREENHOPPER_PLUGIN_KEY + " is not enabled, falling back to the REST endpoint");
+            return beans;
+        }
+        try {
+            ClassLoader loader = plugin.getClassLoader();
+            Bundle bundle = FrameworkUtil.getBundle(loader.loadClass(GREENHOPPER_MARKER_CLASS));
+            BundleContext bundleContext = bundle != null ? bundle.getBundleContext() : null;
+            if (bundleContext == null) return beans;
+
+            ServiceReference<?>[] references =
+                bundleContext.getServiceReferences(SPRING_CONTEXT_SERVICE, null);
+            if (references == null) return beans;
+            for (ServiceReference<?> reference : references) {
+                if (!bundle.getSymbolicName().equals(reference.getProperty(SPRING_CONTEXT_NAME_PROPERTY))) {
+                    continue;
+                }
+                Object springContext = bundleContext.getService(reference);
+                if (springContext == null) continue;
+                try {
+                    for (String typeName : typeNames) {
+                        Object bean = beanOfType(springContext, loader.loadClass(typeName));
+                        if (bean != null) {
+                            beans.put(typeName, bean);
+                        }
+                    }
+                } finally {
+                    bundleContext.ungetService(reference);
+                }
+                return beans;
+            }
+            LOG.log(java.util.logging.Level.WARNING,
+                "No Spring application context service found for bundle " + bundle.getSymbolicName());
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING,
+                "Could not resolve greenhopper beans " + Arrays.toString(typeNames), e);
+        }
+        return beans;
+    }
+
+    /** Returns the first bean of the given type from the greenhopper Spring context. */
+    private Object beanOfType(Object springContext, Class<?> type) throws ReflectiveOperationException {
+        Object names = invokeMethod(springContext, "getBeanNamesForType", type);
+        if (names instanceof String[] && ((String[]) names).length > 0) {
+            return invokeMethod(springContext, "getBean", ((String[]) names)[0]);
+        }
+        return null;
+    }
+
+    /**
+     * Maps greenhopper's {@code HistoricSprintData} to the subset of the sprint report JSON the
+     * gadget reads. Only the scope change figures are needed; issues and estimates come from
+     * JQL, so this is not a byte for byte copy of the REST response.
+     */
+    private JsonObject toSprintReportJson(Object data) {
+        Object contents = fieldValue(data, "contents");
+        if (contents == null) return null;
+
+        JsonObject contentsJson = new JsonObject();
+
+        Object added = fieldValue(contents, "issueKeysAddedDuringSprint");
+        if (added instanceof Map) {
+            JsonObject addedJson = new JsonObject();
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) added).entrySet()) {
+                addedJson.addProperty(String.valueOf(entry.getKey()), Boolean.TRUE.equals(entry.getValue()));
+            }
+            contentsJson.add("issueKeysAddedDuringSprint", addedJson);
+        }
+
+        for (String issueList : SPRINT_REPORT_ISSUE_LISTS) {
+            contentsJson.add(issueList, issueListJson(contents, issueList));
+        }
+
+        JsonObject puntedEstimateSum = numberValue(fieldValue(contents, "puntedIssuesEstimateSum"));
+        if (puntedEstimateSum != null) {
+            contentsJson.add("puntedIssuesEstimateSum", puntedEstimateSum);
+        }
+
+        JsonObject report = new JsonObject();
+        report.add("contents", contentsJson);
+        return report;
+    }
+
+    /**
+     * Maps one of the report's issue lists to JSON with the key and estimate, which is all the
+     * health calculation needs. The report groups every scoped issue into exactly one of these
+     * lists, so together they cover issues that were added and later removed as well.
+     */
+    private JsonArray issueListJson(Object contents, String fieldName) {
+        JsonArray issuesJson = new JsonArray();
+        Object issues = fieldValue(contents, fieldName);
+        if (!(issues instanceof Collection)) return issuesJson;
+        for (Object issue : (Collection<?>) issues) {
+            JsonObject issueJson = new JsonObject();
+            Object key = fieldValue(issue, "key");
+            if (key != null) {
+                issueJson.addProperty("key", key.toString());
+            }
+            JsonObject estimateStatistic = new JsonObject();
+            JsonObject estimate = numberValue(fieldValue(fieldValue(issue, "estimateStatistic"), "statFieldValue"));
+            if (estimate != null) {
+                estimateStatistic.add("statFieldValue", estimate);
+            }
+            issueJson.add("estimateStatistic", estimateStatistic);
+            issuesJson.add(issueJson);
+        }
+        return issuesJson;
+    }
+
+    /** Mirrors greenhopper's {@code NumberFieldValue} ({value, text}) which the report reader sums. */
+    private JsonObject numberValue(Object numberFieldValue) {
+        Object value = fieldValue(numberFieldValue, "value");
+        if (!(value instanceof Number)) return null;
+        JsonObject json = new JsonObject();
+        json.addProperty("value", (Number) value);
+        Object text = fieldValue(numberFieldValue, "text");
+        if (text != null) {
+            json.addProperty("text", text.toString());
+        }
+        return json;
+    }
+
+    private Object fieldValue(Object target, String fieldName) {
+        if (target == null) return null;
+        try {
+            Field field = target.getClass().getField(fieldName);
+            return field.get(target);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Object outcomeValue(Object outcome) {
+        if (outcome == null) return null;
+        try {
+            if (Boolean.FALSE.equals(invokeMethod(outcome, "isValid"))) {
+                LOG.log(java.util.logging.Level.WARNING, "GreenHopper service returned an invalid result: " + outcome);
+                return null;
+            }
+            return invokeMethod(outcome, "getValue");
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.WARNING, "Could not read greenhopper service result", e);
+            return null;
+        }
+    }
+
+    /** Invokes a public method by name and argument types, across greenhopper's class loader. */
+    private Object invokeMethod(Object target, String methodName, Object... args) throws ReflectiveOperationException {
+        for (Method method : target.getClass().getMethods()) {
+            if (!method.getName().equals(methodName) || method.getParameterCount() != args.length) {
+                continue;
+            }
+            Class<?>[] parameterTypes = method.getParameterTypes();
+            boolean compatible = true;
+            for (int i = 0; i < args.length && compatible; i++) {
+                compatible = parameterTypes[i].isPrimitive()
+                    || args[i] == null
+                    || parameterTypes[i].isInstance(args[i]);
+            }
+            if (compatible) {
+                return method.invoke(target, args);
+            }
+        }
+        throw new NoSuchMethodException(target.getClass().getName() + "." + methodName + "/" + args.length);
+    }
+
+    private JsonObject fetchSprintReportOverHttp(long rapidViewId, long sprintId, HttpServletRequest request) {
         try {
             String baseUrl = null;
             if (request != null) {
@@ -295,8 +734,23 @@ public class SprintGadgetResource {
             br.close();
             return new JsonParser().parse(sb.toString()).getAsJsonObject();
         } catch (Exception e) {
-            LOG.log(java.util.logging.Level.WARNING, "fetchSprintReport failed", e);
+            LOG.log(java.util.logging.Level.WARNING, "fetchSprintReportOverHttp failed", e);
             return null;
+        }
+    }
+
+    /**
+     * Drops expired entries once the cache grows past its bound. Entries are also discarded
+     * when they are read, so this only keeps the footprint of a long running instance small.
+     */
+    private void evictExpiredReports() {
+        if (REPORT_CACHE.size() <= REPORT_CACHE_MAX_ENTRIES) {
+            return;
+        }
+        for (Map.Entry<String, CachedSprintReport> entry : REPORT_CACHE.entrySet()) {
+            if (entry.getValue().isExpired()) {
+                REPORT_CACHE.remove(entry.getKey(), entry.getValue());
+            }
         }
     }
 
@@ -312,6 +766,30 @@ public class SprintGadgetResource {
             }
         }
         return 0;
+    }
+
+    /**
+     * Story points for every issue the sprint report knows about, keyed by issue key. An issue
+     * that was added after the sprint started and then removed is no longer part of the sprint,
+     * so its points are only available here.
+     */
+    private Map<String, Double> reportEstimates(JsonObject contents) {
+        Map<String, Double> estimates = new HashMap<>();
+        for (String issueList : SPRINT_REPORT_ISSUE_LISTS) {
+            JsonElement list = contents.get(issueList);
+            if (list == null || !list.isJsonArray()) continue;
+            for (JsonElement element : list.getAsJsonArray()) {
+                if (!element.isJsonObject()) continue;
+                JsonObject issue = element.getAsJsonObject();
+                if (!issue.has("key") || issue.get("key").isJsonNull()) continue;
+                double points = 0;
+                if (issue.has("estimateStatistic") && issue.get("estimateStatistic").isJsonObject()) {
+                    points = sumEstimate(issue.getAsJsonObject("estimateStatistic").get("statFieldValue"));
+                }
+                estimates.put(issue.get("key").getAsString(), points);
+            }
+        }
+        return estimates;
     }
 
     private JsonObject buildIssuesByStatusJson(Object sprint) {

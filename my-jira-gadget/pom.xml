@@ -84,6 +84,12 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.core</artifactId>
+            <version>4.3.1</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
             <groupId>com.google.code.gson</groupId>
             <artifactId>gson</artifactId>
             <version>2.10.1</version>
@@ -111,7 +117,7 @@
                     <instructions>
                         <Atlassian-Plugin-Key>${project.groupId}.${project.artifactId}</Atlassian-Plugin-Key>
                         <Export-Package>
-                            com.garfieldArlene.jira.gadget.*
+                            com.garfieldarlene.jira.gadget.*
                         </Export-Package>
                         <Import-Package>
                             com.atlassian.plugin.spring.scanner.annotation.*,

@@ -17,6 +17,7 @@ A Jira Server/Data Center dashboard gadget that combines the ideas of **Sprint H
 - **Issues by status**, grouped and collapsible, showing key, summary, type, story points, assignee, priority, and blocked/flagged indicators.
 - **Per-group totals** and a sprint summary row (total SP, issue count, completed SP).
 - **Blocked/flagged detection** from issue links, custom fields, and labels.
+- **Auto-refresh** (every 30 seconds by default, configurable or off) that keeps the metrics live, with a last-updated timestamp and no polling while the browser tab is hidden. The interval is selectable in the gadget itself, next to the Refresh button, so it can be changed even when the gadget's configuration form is not available.
 - **Permission-aware**: all queries run as the logged-in user, so only issues that user can see are returned.
 - Read-only: no Jira data is modified.
 
@@ -60,8 +61,8 @@ Copy the JAR into `<jira-home>/plugins/installed-plugins/` and restart Jira.
 1. Open or create a dashboard and choose **Add gadget**.
 2. Search for **Sprint Pulse** and add it.
 3. Optionally open the gadget's edit/configuration dialog and set a **Board ID** to limit the sprint list to a single board.
-4. Select a sprint from the dropdown. The gadget loads health metrics and issues automatically.
-5. Click **Refresh** to reload the selected sprint.
+4. Select a sprint from the dropdown. It lists the running sprint, sprints still to come, and the 20 most recent closed sprints on the visible boards. The gadget loads health metrics and issues automatically.
+5. Click **Refresh** to reload the selected sprint on demand. By default the gadget also refreshes itself every 30 seconds; the last-updated time next to the button shows when the data was fetched. The dropdown next to the button sets the refresh interval (`Auto off`, `Every 30s`, `Every 1m`, `Every 5m`) and is remembered per user.
 
 The selected sprint is saved as a gadget preference. Other preferences (shown in the configuration dialog) include:
 
@@ -72,6 +73,7 @@ The selected sprint is saved as a gadget preference. Other preferences (shown in
 | Show Health Summary | `true` | Show or hide the health metric cards |
 | Show Issues Table | `true` | Show or hide the issues table |
 | Group by Status | `true` | Group issues by workflow status (grouping is currently always applied) |
+| Auto refresh | 30 seconds | How often the gadget reloads the selected sprint (`30` seconds, `60` seconds, `300` seconds, or `Off`) |
 
 ### Selecting story points
 
@@ -91,7 +93,7 @@ The gadget is backed by a REST module at `/rest/sprint/1.0`.
 
 | Method | Path | Query parameters | Description |
 | --- | --- | --- | --- |
-| `GET` | `/rest/sprint/1.0/sprints` | `boardId` (optional) | List sprints visible to the current user |
+| `GET` | `/rest/sprint/1.0/sprints` | `boardId` (optional) | Active and future sprints plus the 20 most recent closed ones, on boards the user can see |
 | `GET` | `/rest/sprint/1.0/data` | `sprintId` or `boardId` | Sprint, health metrics, and issues grouped by status |
 
 Example:
