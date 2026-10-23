@@ -1,0 +1,801 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Module>
+    <ModulePrefs title="Sprint Pulse"
+                 description="Sprint health metrics and issues grouped by status with story points — combines Sprint Health and Sprint Statistics"
+                 author="Example Corp"
+                 author_email="dev@example.com"
+                 thumbnail='#staticResourceUrl("com.garfieldArlene.jira.gadget.sprint-pulse:gadget-resources", "thumbnail.png")'
+                 height="500"
+                 scrollable="true">
+        <Require feature="dynamic-height"/>
+        <Require feature="setprefs"/>
+        <Optional feature="minimessage"/>
+
+        <UserPref name="sprintId" display_name="Sprint" datatype="list" default_value=""/>
+        <UserPref name="boardId" display_name="Board" datatype="string" default_value=""/>
+        <UserPref name="showHealth" display_name="Show Health Summary" datatype="bool" default_value="true"/>
+        <UserPref name="showTable" display_name="Show Issues Table" datatype="bool" default_value="true"/>
+        <UserPref name="groupByStatus" display_name="Group by Status" datatype="bool" default_value="true"/>
+        <UserPref name="refreshInterval" display_name="Auto refresh" datatype="list" default_value="30">
+            <Option selected="true" value="30">Every 30 seconds</Option>
+            <Option value="60">Every minute</Option>
+            <Option value="300">Every 5 minutes</Option>
+            <Option value="0">Off</Option>
+        </UserPref>
+
+        <Locale lang="en" country="US">
+            <msg name="gadget.title">Sprint Pulse</msg>
+            <msg name="gadget.description">Sprint health metrics and issues grouped by status with story points — combines Sprint Health and Sprint Statistics</msg>
+            <msg name="prefs.sprint">Sprint</msg>
+            <msg name="prefs.board">Board ID</msg>
+            <msg name="prefs.showHealth">Show Health Summary</msg>
+            <msg name="prefs.showTable">Show Issues Table</msg>
+            <msg name="prefs.groupByStatus">Group by Status</msg>
+            <msg name="prefs.refreshInterval">Auto refresh</msg>
+        </Locale>
+    </ModulePrefs>
+
+    <Content type="html">
+        <![CDATA[
+        <html>
+        <head>
+            <style>
+                * { box-sizing: border-box; }
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; padding: 12px; margin: 0; font-size: 13px; color: #172b4d; background: #fff; }
+                
+                /* Layout */
+                .gadget { display: flex; flex-direction: column; gap: 16px; }
+                .section { background: #fff; border: 1px solid #dfe1e6; border-radius: 6px; overflow: hidden; }
+                .section-header { padding: 12px 16px; background: #f4f5f7; border-bottom: 1px solid #dfe1e6; font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: space-between; }
+                .section-content { padding: 16px; }
+                
+                /* Sprint selector */
+                .sprint-selector { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+                .sprint-selector select { flex: 1; min-width: 200px; padding: 6px 10px; border: 1px solid #dfe1e6; border-radius: 3px; font-size: 13px; background: #fff; }
+                .sprint-selector select:focus { outline: none; border-color: #0052cc; box-shadow: 0 0 0 2px rgba(0,82,204,0.2); }
+                .sprint-selector select.board-select { flex: 0 1 auto; min-width: 150px; max-width: 220px; }
+                .refresh-btn { padding: 6px 12px; background: #0052cc; color: #fff; border: none; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 500; white-space: nowrap; }
+                .refresh-btn:hover { background: #0065ff; }
+                .refresh-btn:disabled { background: #a5adba; cursor: not-allowed; }
+                .last-updated { font-size: 11px; color: #5e6c84; white-space: nowrap; }
+                .interval-select { padding: 6px 8px; border: 1px solid #dfe1e6; border-radius: 3px; font-size: 12px; background: #fff; color: #42526e; cursor: pointer; }
+                .interval-select:focus { outline: none; border-color: #0052cc; box-shadow: 0 0 0 2px rgba(0,82,204,0.2); }
+                
+                /* Health Summary */
+                .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+                .health-card { background: #fafbfc; border: 1px solid #dfe1e6; border-radius: 6px; padding: 16px; text-align: center; }
+                .health-card.primary { border-color: #0052cc; background: #eef3ff; }
+                .health-card.warning { border-color: #ff8b00; background: #fff4e6; }
+                .health-card.success { border-color: #00875a; background: #e4fcec; }
+                .health-value { font-size: 28px; font-weight: 700; line-height: 1.2; }
+                .health-value.primary { color: #0052cc; }
+                .health-value.warning { color: #ff8b00; }
+                .health-value.success { color: #00875a; }
+                .health-label { font-size: 11px; color: #5e6c84; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+                .health-sub { font-size: 12px; color: #5e6c84; margin-top: 8px; }
+                
+                /* Progress bar */
+                .progress-container { margin-top: 12px; }
+                .progress-bar { height: 8px; background: #dfe1e6; border-radius: 4px; overflow: hidden; }
+                .progress-fill { height: 100%; border-radius: 4px; transition: width 0.3s ease; }
+                .progress-fill.primary { background: linear-gradient(90deg, #0052cc, #0065ff); }
+                .progress-fill.success { background: linear-gradient(90deg, #00875a, #00a86b); }
+                .progress-labels { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: #5e6c84; }
+                
+                /* Issues Table */
+                .table-wrapper { overflow-x: auto; }
+                table { width: 100%; border-collapse: collapse; font-size: 12px; }
+                thead th { text-align: left; padding: 8px 12px; background: #f4f5f7; color: #5e6c84; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #dfe1e6; white-space: nowrap; }
+                tbody td { padding: 8px 12px; border-bottom: 1px solid #eaecf0; vertical-align: middle; }
+                tbody tr:hover { background: #fafbfc; }
+                tbody tr:last-child td { border-bottom: none; }
+                
+                /* Status grouping */
+                .status-group { border-top: 2px solid #dfe1e6; }
+                .status-group:first-child { border-top: none; }
+                .status-header { background: #f4f5f7 !important; }
+                .status-header td { padding: 10px 12px; font-weight: 600; color: #172b4d; font-size: 12px; }
+                .status-header .status-badge { display: inline-flex; align-items: center; gap: 6px; }
+                .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+                .status-badge.to-do { background: #e3fcef; color: #006644; }
+                .status-badge.in-progress { background: #eef3ff; color: #0052cc; }
+                .status-badge.in-review { background: #faf0ff; color: #663399; }
+                .status-badge.done { background: #e3fcef; color: #006644; }
+                .status-badge.default { background: #f4f5f7; color: #5e6c84; }
+                
+                /* Issue row */
+                .issue-key { font-weight: 600; color: #0052cc; text-decoration: none; white-space: nowrap; }
+                .issue-key:hover { text-decoration: underline; }
+                .issue-summary { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #172b4d; }
+                .issue-type { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; }
+                .issue-type.story { background: #e3fcef; color: #006644; }
+                .issue-type.task { background: #eef3ff; color: #0052cc; }
+                .issue-type.bug { background: #ffebe6; color: #de350b; }
+                .issue-type.epic { background: #faf0ff; color: #663399; }
+                .issue-type.default { background: #f4f5f7; color: #5e6c84; }
+                .story-points { font-weight: 600; color: #172b4d; text-align: right; font-variant-numeric: tabular-nums; }
+                .story-points.zero { color: #a5adba; }
+                .assignee { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+                .assignee-avatar { width: 20px; height: 20px; border-radius: 50%; background: #0052cc; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; }
+                .priority { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: capitalize; }
+                .priority.highest { background: #ffebe6; color: #de350b; }
+                .priority.high { background: #ffebe6; color: #de350b; }
+                .priority.medium { background: #fff4e6; color: #ff8b00; }
+                .priority.low { background: #e3fcef; color: #00875a; }
+                .priority.lowest { background: #e3fcef; color: #00875a; }
+                .priority.none { background: #f4f5f7; color: #5e6c84; }
+                
+                /* Blocked/Flagged indicators */
+                .issue-flags { display: flex; gap: 4px; align-items: center; }
+                .flag-badge { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+                .flag-badge.blocked { background: #fff4e6; color: #ff8b00; }
+                .flag-badge.flagged { background: #ffebe6; color: #de350b; }
+                .flag-badge.blocked.flagged { background: #fef0e6; color: #de350b; }
+                .flag-icon { font-size: 11px; line-height: 1; }
+                
+                /* Summary row */
+                .summary-row { background: #f4f5f7; font-weight: 600; }
+                .summary-row td { border-top: 2px solid #dfe1e6; }
+                
+                /* Collapsible status groups */
+                .status-header { cursor: pointer; }
+                .status-header:hover td { background: #ebecf0; }
+                .status-header-inner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+                .status-header-left { display: inline-flex; align-items: center; gap: 4px; }
+                .status-header-stats { display: inline-flex; align-items: center; gap: 16px; font-weight: 400; color: #5e6c84; white-space: nowrap; }
+                .status-header-stats strong { color: #172b4d; }
+                .status-toggle { display: inline-block; width: 14px; color: #5e6c84; transition: transform 0.15s ease; }
+                .status-toggle.collapsed { transform: rotate(-90deg); }
+                .hidden-row { display: none; }
+                
+                /* Empty state */
+                .empty { text-align: center; padding: 32px; color: #5e6c84; }
+                .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.5; }
+                
+                /* Loading/Error */
+                .loading, .error { text-align: center; padding: 32px; }
+                .loading { color: #5e6c84; }
+                .error { color: #de350b; }
+                .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid #dfe1e6; border-top-color: #0052cc; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
+                @keyframes spin { to { transform: rotate(360deg); } }
+                
+                /* Responsive */
+                @media (max-width: 600px) {
+                    .health-grid { grid-template-columns: 1fr 1fr; }
+                    table { font-size: 11px; }
+                    th, td { padding: 6px 8px; }
+                }
+            </style>
+        </head>
+        <body>
+            <div id="gadget" class="gadget">
+                <!-- Sprint Selector -->
+                <div class="section">
+                    <div class="section-content" style="padding: 12px 16px;">
+                        <div class="sprint-selector">
+                            <select id="boardSelect" class="board-select" aria-label="Select Board" title="Select Board" style="display:none;">
+                                <option value="">All boards</option>
+                            </select>
+                            <select id="sprintSelect" aria-label="Select Sprint">
+                                <option value="">Loading sprints...</option>
+                            </select>
+                            <button id="refreshBtn" class="refresh-btn" type="button">
+                                <span id="btnText">Refresh</span>
+                                <span id="btnSpinner" class="spinner" style="display:none;"></span>
+                            </button>
+                            <select id="refreshIntervalSelect" class="interval-select" aria-label="Auto refresh interval" title="Auto refresh interval">
+                                <option value="0">Auto off</option>
+                                <option value="30">Every 30s</option>
+                                <option value="60">Every 1m</option>
+                                <option value="300">Every 5m</option>
+                            </select>
+                            <span id="lastUpdated" class="last-updated"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Health Summary -->
+                <div id="healthSection" class="section" style="display:none;">
+                    <div class="section-header">Sprint Health</div>
+                    <div class="section-content">
+                        <div class="health-grid" id="healthGrid">
+                            <!-- Populated by JS -->
+                        </div>
+                        <div class="progress-container" id="progressContainer" style="display:none;">
+                            <div class="progress-bar">
+                                <div id="progressFill" class="progress-fill primary" style="width: 0%;"></div>
+                            </div>
+                            <div class="progress-labels">
+                                <span>Completed</span>
+                                <span id="progressPercent">0%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Issues Table -->
+                <div id="tableSection" class="section" style="display:none;">
+                    <div class="section-header">
+                        <span>Issues by Status</span>
+                        <span id="issueCount" style="font-weight:400;color:#5e6c84;font-size:12px;"></span>
+                    </div>
+                    <div class="section-content" style="padding:0;">
+                        <div class="table-wrapper">
+                            <table id="issuesTable">
+                                <thead>
+                                    <tr>
+                                        <th style="width:80px;">Key</th>
+                                        <th>Summary</th>
+                                        <th style="width:100px;">Type</th>
+                                        <th style="width:90px;text-align:right;">Story Points</th>
+                                        <th style="width:140px;">Assignee</th>
+                                        <th style="width:90px;">Priority</th>
+                                        <th style="width:80px;">Flags</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="issuesBody">
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="emptyState" class="empty" style="display:none;">
+                            <div class="empty-icon">📋</div>
+                            <div>No issues in this sprint</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                (function() {
+                    var baseUrl = '__ATLASSIAN_BASE_URL__';
+                    if (!baseUrl || baseUrl.indexOf('__') === 0) {
+                        var p = window.location.pathname;
+                        var i = p.indexOf('/plugins/');
+                        baseUrl = window.location.origin + (i > 0 ? p.substring(0, i) : '');
+                    }
+                    var prefs = new gadgets.Prefs();
+                    var boardSelect = document.getElementById('boardSelect');
+                    var sprintSelect = document.getElementById('sprintSelect');
+                    var refreshBtn = document.getElementById('refreshBtn');
+                    var intervalSelect = document.getElementById('refreshIntervalSelect');
+                    var btnText = document.getElementById('btnText');
+                    var btnSpinner = document.getElementById('btnSpinner');
+                    var healthSection = document.getElementById('healthSection');
+                    var tableSection = document.getElementById('tableSection');
+                    var healthGrid = document.getElementById('healthGrid');
+                    var progressContainer = document.getElementById('progressContainer');
+                    var progressFill = document.getElementById('progressFill');
+                    var progressPercent = document.getElementById('progressPercent');
+                    var issuesBody = document.getElementById('issuesBody');
+                    var emptyState = document.getElementById('emptyState');
+                    var issueCount = document.getElementById('issueCount');
+                    var expandedGroups = {};
+
+                    function prefString(name, def) {
+                        try {
+                            var v = prefs.getString(name);
+                            return (v === undefined || v === null || v === '') ? def : v;
+                        } catch (e) { return def; }
+                    }
+                    function prefBool(name, def) {
+                        try {
+                            var v = prefs.getString(name);
+                            if (v === undefined || v === null || v === '') return def;
+                            v = String(v).toLowerCase();
+                            return v === 'true' || v === '1' || v === 'yes' || v === 'on';
+                        } catch (e) { return def; }
+                    }
+
+                    var currentSprintId = prefString('sprintId', null);
+                    var currentBoardId = prefString('boardId', null);
+                    var showHealth = prefBool('showHealth', true);
+                    var showTable = prefBool('showTable', true);
+                    var groupByStatus = prefBool('groupByStatus', true);
+                    var refreshIntervalSec = parseInt(prefString('refreshInterval', '30'), 10);
+                    if (isNaN(refreshIntervalSec)) refreshIntervalSec = 30;
+
+                    var INTERVAL_OPTIONS = [0, 30, 60, 300];
+
+                    var isLoading = false;
+                    var lastUpdatedAt = null;
+
+                    // The dashboard does not always give access to the gadget's
+                    // configuration form, so the interval is also selectable in the
+                    // gadget itself. Both write to the same preference.
+                    function applyInterval(sec, persist) {
+                        refreshIntervalSec = parseInt(sec, 10);
+                        if (isNaN(refreshIntervalSec) || INTERVAL_OPTIONS.indexOf(refreshIntervalSec) === -1) {
+                            refreshIntervalSec = 30;
+                        }
+                        if (intervalSelect) intervalSelect.value = String(refreshIntervalSec);
+                        if (persist) {
+                            try { prefs.set('refreshInterval', String(refreshIntervalSec)); } catch (e) { /* not persisted, still applied */ }
+                        }
+                        startAutoRefresh();
+                    }
+
+                    if (INTERVAL_OPTIONS.indexOf(refreshIntervalSec) === -1) refreshIntervalSec = 30;
+                    if (intervalSelect) intervalSelect.value = String(refreshIntervalSec);
+
+                    // The timer lives on window so a re-rendered gadget clears the previous
+                    // one instead of leaving it polling against a detached DOM.
+                    function stopAutoRefresh() {
+                        if (window.__sprintPulseRefreshTimer) {
+                            clearInterval(window.__sprintPulseRefreshTimer);
+                            window.__sprintPulseRefreshTimer = null;
+                        }
+                    }
+                    stopAutoRefresh();
+
+                    function startAutoRefresh() {
+                        stopAutoRefresh();
+                        if (!refreshIntervalSec || refreshIntervalSec <= 0 || !currentSprintId) return;
+                        window.__sprintPulseRefreshTimer = setInterval(autoRefreshTick, refreshIntervalSec * 1000);
+                    }
+
+                    function autoRefreshTick() {
+                        if (document.hidden) return;
+                        if (isLoading || !currentSprintId) return;
+                        loadSprintData(currentSprintId, true);
+                    }
+
+                    function markUpdated() {
+                        lastUpdatedAt = new Date();
+                        var el = document.getElementById('lastUpdated');
+                        if (el) el.textContent = 'Updated ' + lastUpdatedAt.toLocaleTimeString();
+                    }
+
+                    // Status badge mapping
+                    var statusBadgeClass = {
+                        'to do': 'to-do', 'open': 'to-do', 'backlog': 'to-do',
+                        'in progress': 'in-progress', 'in development': 'in-progress', 'dev in progress': 'in-progress',
+                        'in review': 'in-review', 'code review': 'in-review', 'review': 'in-review', 'testing': 'in-review', 'qa': 'in-review',
+                        'done': 'done', 'closed': 'done', 'resolved': 'done', 'complete': 'done'
+                    };
+
+                    var issueTypeClass = {
+                        'story': 'story', 'task': 'task', 'bug': 'bug', 'epic': 'epic', 'sub-task': 'task'
+                    };
+
+                    var priorityClass = {
+                        'highest': 'highest', 'high': 'high', 'medium': 'medium', 'low': 'low', 'lowest': 'lowest', 'none': 'none'
+                    };
+
+                    var STATUS_ORDER = ['To Do', 'Open', 'In Progress', 'In Review', 'Code Review', 'Testing', 'Done', 'Closed', 'Resolved'];
+
+                    function orderedStatuses(issuesByStatus) {
+                        var ordered = [];
+                        STATUS_ORDER.forEach(function(status) {
+                            if (issuesByStatus[status]) ordered.push(status);
+                        });
+                        Object.keys(issuesByStatus).forEach(function(status) {
+                            if (STATUS_ORDER.indexOf(status) === -1) ordered.push(status);
+                        });
+                        return ordered;
+                    }
+
+                    function sumStoryPoints(issues) {
+                        return issues.reduce(function(sum, issue) { return sum + (issue.storyPoints || 0); }, 0);
+                    }
+
+                    function countFlaggedIssues(issuesByStatus, flag) {
+                        var count = 0;
+                        Object.keys(issuesByStatus || {}).forEach(function(status) {
+                            issuesByStatus[status].forEach(function(issue) {
+                                if (issue[flag]) count++;
+                            });
+                        });
+                        return count;
+                    }
+
+                    function getInitials(name) {
+                        if (!name || name === 'Unassigned') return '?';
+                        return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+                    }
+
+                    function getAvatarColor(name) {
+                        var colors = ['#0052cc', '#00875a', '#663399', '#de350b', '#ff8b00', '#00a86b', '#5243aa'];
+                        var hash = 0;
+                        for (var i = 0; i < (name || '').length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+                        return colors[Math.abs(hash) % colors.length];
+                    }
+
+                    function formatNumber(num) {
+                        if (num === null || num === undefined) return '—';
+                        return num % 1 === 0 ? num.toString() : num.toFixed(1);
+                    }
+
+                    function setLoading(loading, silent) {
+                        isLoading = loading;
+                        if (silent) return;
+                        refreshBtn.disabled = loading;
+                        btnText.textContent = loading ? 'Loading...' : 'Refresh';
+                        btnSpinner.style.display = loading ? 'inline-block' : 'none';
+                    }
+
+                    function showError(msg) {
+                        stopAutoRefresh();
+                        healthSection.style.display = 'none';
+                        tableSection.style.display = 'none';
+                        document.getElementById('gadget').innerHTML = 
+                            '<div class="section"><div class="section-content"><div class="error">' + msg + '</div></div></div>' +
+                            '<div class="section" style="padding-top:8px;"><div class="section-content"><button class="refresh-btn" onclick="location.reload()">Retry</button></div></div>';
+                        gadgets.window.adjustHeight();
+                    }
+
+                    function ajaxGet(url, onSuccess, onError) {
+                        fetch(url, {
+                            method: 'GET',
+                            credentials: 'same-origin',
+                            headers: { 'Accept': 'application/json', 'X-Atlassian-Token': 'no-check' }
+                        }).then(function(res) {
+                            return res.text().then(function(text) {
+                                if (!res.ok) { onError('HTTP ' + res.status + ': ' + text); return; }
+                                try { onSuccess(JSON.parse(text)); }
+                                catch (e) { onError('Invalid response format: ' + e.message); }
+                            });
+                        }).catch(function(err) { onError('Request failed: ' + err.message); });
+                    }
+
+                    // The dashboard does not always give access to the gadget's configuration
+                    // form, so the board is also selectable in the gadget itself. The list is
+                    // optional: if it cannot be loaded, sprints from every board are shown.
+                    function loadBoards() {
+                        if (!boardSelect) {
+                            loadSprints();
+                            return;
+                        }
+                        ajaxGet(baseUrl + '/rest/sprint/1.0/boards', function(data) {
+                            var boards = data.boards || [];
+                            boardSelect.innerHTML = '';
+                            var allOption = document.createElement('option');
+                            allOption.value = '';
+                            allOption.textContent = 'All boards';
+                            boardSelect.appendChild(allOption);
+                            boards.forEach(function(board) {
+                                var opt = document.createElement('option');
+                                opt.value = String(board.id);
+                                opt.textContent = board.name;
+                                boardSelect.appendChild(opt);
+                            });
+
+                            // A stored board that is gone or not visible (for example a kanban
+                            // board) falls back to all boards.
+                            if (currentBoardId && !hasOption(boardSelect, String(currentBoardId))) {
+                                currentBoardId = null;
+                                try { prefs.set('boardId', ''); } catch (e) { /* not persisted */ }
+                            }
+                            boardSelect.value = currentBoardId ? String(currentBoardId) : '';
+                            // With a single board the filter cannot change anything.
+                            boardSelect.style.display = boards.length > 1 ? '' : 'none';
+                            loadSprints();
+                            gadgets.window.adjustHeight();
+                        }, function() {
+                            if (boardSelect) boardSelect.style.display = 'none';
+                            loadSprints();
+                        });
+                    }
+
+                    function hasOption(select, value) {
+                        for (var i = 0; i < select.options.length; i++) {
+                            if (select.options[i].value === value) return true;
+                        }
+                        return false;
+                    }
+
+                    function loadSprints() {
+                        var boardId = currentBoardId ? parseInt(currentBoardId) : null;
+                        var url = baseUrl + '/rest/sprint/1.0/sprints' + (boardId ? '?boardId=' + boardId : '');
+
+                        ajaxGet(url, function(data) {
+                            var sprints = data.sprints || [];
+                            var previousSprintId = currentSprintId;
+                            sprintSelect.innerHTML = '<option value="">Select a sprint...</option>';
+                            var selected = null;
+                            sprints.forEach(function(sprint) {
+                                var opt = document.createElement('option');
+                                opt.value = String(sprint.id);
+                                var dateStr = sprint.startDate ? new Date(sprint.startDate).toLocaleDateString() : '';
+                                var endStr = sprint.endDate ? new Date(sprint.endDate).toLocaleDateString() : '';
+                                opt.textContent = sprint.name + (dateStr ? ' (' + dateStr + ' → ' + endStr + ')' : '') + ' [' + sprint.state + ']';
+                                if (currentSprintId && currentSprintId == sprint.id) selected = sprint;
+                                sprintSelect.appendChild(opt);
+                            });
+
+                            // Keep the selected sprint when it is still available, otherwise
+                            // fall back to the first one (the running sprint) so switching
+                            // boards always shows data.
+                            if (!selected && sprints.length > 0) selected = sprints[0];
+                            if (selected) {
+                                currentSprintId = selected.id;
+                                sprintSelect.value = String(currentSprintId);
+                                if (String(previousSprintId) !== String(currentSprintId)) {
+                                    try { prefs.set('sprintId', String(currentSprintId)); } catch (e) { /* not persisted */ }
+                                }
+                                loadSprintData(currentSprintId);
+                            } else {
+                                currentSprintId = null;
+                                stopAutoRefresh();
+                                healthSection.style.display = 'none';
+                                tableSection.style.display = 'none';
+                            }
+                            gadgets.window.adjustHeight();
+                        }, function(err) {
+                            sprintSelect.innerHTML = '<option value="">Failed to load sprints</option>';
+                            showError('Failed to load sprints: ' + err);
+                        });
+                    }
+
+                    function loadSprintData(sprintId, silent) {
+                        if (isLoading) return;
+                        setLoading(true, silent);
+                        var url = baseUrl + '/rest/sprint/1.0/data?sprintId=' + sprintId;
+
+                        ajaxGet(url, function(data) {
+                            setLoading(false, silent);
+                            if (data.error) {
+                                showError(data.error);
+                                return;
+                            }
+                            var blockedIssues = countFlaggedIssues(data.issuesByStatus, 'blocked');
+                            var flaggedIssues = countFlaggedIssues(data.issuesByStatus, 'flagged');
+                            renderHealth(data.health, data.sprint, blockedIssues, flaggedIssues);
+                            renderTable(data.issuesByStatus, data.sprint);
+                            markUpdated();
+                            startAutoRefresh();
+                            gadgets.window.adjustHeight();
+                        }, function(err) {
+                            setLoading(false, silent);
+                            showError('Failed to load sprint data: ' + err);
+                        });
+                    }
+
+                    function renderHealth(health, sprint, blockedIssues, flaggedIssues) {
+                        if (!showHealth || !health) {
+                            healthSection.style.display = 'none';
+                            return;
+                        }
+                        healthSection.style.display = 'block';
+
+                        var committed = health.committedStoryPoints || 0;
+                        var completed = health.completedStoryPoints || 0;
+                        var added = health.addedStoryPoints || 0;
+                        var removed = health.removedStoryPoints || 0;
+                        var totalIssues = health.totalIssues || 0;
+                        var completedIssues = health.completedIssues || 0;
+                        var pct = health.completionPercent || 0;
+                        var issuePct = health.issueCompletionPercent || 0;
+
+                        healthGrid.innerHTML = '';
+
+                        var cards = [
+                            { label: 'Committed', value: formatNumber(committed), unit: 'SP', class: 'primary', sub: 'Story Points' },
+                            { label: 'Completed', value: formatNumber(completed), unit: 'SP', class: 'success', sub: 'Story Points' },
+                            { label: 'Added', value: formatNumber(added), unit: 'SP', class: 'warning', sub: 'Scope Change' },
+                            { label: 'Removed', value: formatNumber(removed), unit: 'SP', class: 'primary', sub: 'Scope Change' },
+                            { label: 'Blocked', value: blockedIssues || 0, unit: '', class: blockedIssues > 0 ? 'warning' : 'success', sub: 'Blocked Issues' },
+                            { label: 'Flagged', value: flaggedIssues || 0, unit: '', class: flaggedIssues > 0 ? 'warning' : 'success', sub: 'Flagged Issues' },
+                            { label: 'Issues', value: totalIssues, unit: '', class: 'primary', sub: completedIssues + ' completed' },
+                            { label: 'Completion', value: pct, unit: '%', class: pct >= 100 ? 'success' : (pct >= 70 ? 'primary' : 'warning'), sub: 'Story Points' }
+                        ];
+
+                        cards.forEach(function(card) {
+                            var div = document.createElement('div');
+                            div.className = 'health-card ' + card.class;
+                            div.innerHTML = 
+                                '<div class="health-value ' + card.class + '">' + card.value + '<span style="font-size:14px;font-weight:400;color:inherit;margin-left:2px;">' + card.unit + '</span></div>' +
+                                '<div class="health-label">' + card.label + '</div>' +
+                                '<div class="health-sub">' + card.sub + '</div>';
+                            healthGrid.appendChild(div);
+                        });
+
+                        // Progress bar
+                        progressContainer.style.display = 'block';
+                        progressFill.style.width = Math.min(pct, 100) + '%';
+                        progressFill.className = 'progress-fill ' + (pct >= 100 ? 'success' : 'primary');
+                        progressPercent.textContent = pct + '% Complete (' + completedIssues + '/' + totalIssues + ' issues)';
+                    }
+
+                    function renderTable(issuesByStatus, sprint) {
+                        if (!showTable) {
+                            tableSection.style.display = 'none';
+                            return;
+                        }
+                        tableSection.style.display = 'block';
+
+                        if (!issuesByStatus || Object.keys(issuesByStatus).length === 0) {
+                            issuesBody.innerHTML = '';
+                            emptyState.style.display = 'block';
+                            issueCount.textContent = '0 issues';
+                            return;
+                        }
+                        emptyState.style.display = 'none';
+
+                        var allIssues = [];
+                        var rows = [];
+                        var statuses = orderedStatuses(issuesByStatus);
+
+                        statuses.forEach(function(status) {
+                            allIssues = allIssues.concat(issuesByStatus[status]);
+                        });
+                        var totalSp = sumStoryPoints(allIssues);
+
+                        statuses.forEach(function(status) {
+                            renderStatusGroup(status, issuesByStatus[status], rows, totalSp);
+                        });
+
+                        // Summary row
+                        var completedSP = allIssues.filter(function(i){
+                            var cat = (i.statusCategory || '').toString().toLowerCase();
+                            return cat === 'done' || cat === 'complete';
+                        }).reduce(function(sum, i){ return sum + (i.storyPoints || 0); }, 0);
+                        rows.push('<tr class="summary-row">' +
+                            '<td colspan="3">Total</td>' +
+                            '<td style="text-align:right;">' + formatNumber(totalSp) + ' SP</td>' +
+                            '<td>' + allIssues.length + ' issues</td>' +
+                            '<td>' + formatNumber(completedSP) + ' SP done</td>' +
+                            '<td></td>' +
+                        '</tr>');
+
+                        issuesBody.innerHTML = rows.join('');
+                        issueCount.textContent = allIssues.length + ' issues';
+                    }
+
+                    function renderStatusGroup(status, issues, rows, totalSp) {
+                        var badgeClass = statusBadgeClass[status.toLowerCase()] || 'default';
+                        var statusKey = status.toLowerCase().replace(/\s+/g, '-');
+                        var expanded = !!expandedGroups[statusKey];
+                        var groupSp = sumStoryPoints(issues);
+                        var share = totalSp > 0 ? Math.round((groupSp / totalSp) * 100) : 0;
+                        var rowClass = 'issue-row' + (expanded ? '' : ' hidden-row');
+                        
+                        rows.push('<tr class="status-header" data-status="' + statusKey + '">' +
+                            '<td colspan="7">' +
+                                '<div class="status-header-inner">' +
+                                    '<span class="status-header-left">' +
+                                        '<span class="status-toggle' + (expanded ? '' : ' collapsed') + '">▾</span> ' +
+                                        '<span class="status-badge ' + badgeClass + '">' + status + '</span>' +
+                                    '</span>' +
+                                    '<span class="status-header-stats">' +
+                                        '<span><strong>' + issues.length + '</strong> issues</span>' +
+                                        '<span><strong>' + formatNumber(groupSp) + '</strong> SP</span>' +
+                                        '<span><strong>' + share + '%</strong> of SP</span>' +
+                                    '</span>' +
+                                '</div>' +
+                            '</td></tr>');
+                        
+                        issues.forEach(function(issue) {
+                            var typeClass = issueTypeClass[issue.issueType.toLowerCase()] || 'default';
+                            var priority = (issue.priority || 'none').toLowerCase();
+                            var priClass = priorityClass[priority] || 'none';
+                            var sp = issue.storyPoints || 0;
+                            var spClass = sp > 0 ? '' : ' zero';
+                            
+                            var assigneeHtml = issue.assignee && issue.assignee !== 'Unassigned' 
+                                ? '<span class="assignee"><span class="assignee-avatar" style="background:' + getAvatarColor(issue.assignee) + '">' + getInitials(issue.assignee) + '</span>' + issue.assignee + '</span>'
+                                : '<span style="color:#a5adba;">Unassigned</span>';
+
+                            // Build flags
+                            var flagsHtml = '<div class="issue-flags">';
+                            if (issue.blocked) {
+                                flagsHtml += '<span class="flag-badge blocked" title="' + (issue.blockedReason || 'Blocked').replace(/"/g, '&quot;') + '"><span class="flag-icon">🔗</span> Blocked</span>';
+                            }
+                            if (issue.flagged) {
+                                flagsHtml += '<span class="flag-badge flagged" title="' + (issue.flaggedReason || 'Flagged').replace(/"/g, '&quot;') + '"><span class="flag-icon">🚩</span> Flagged</span>';
+                            }
+                            flagsHtml += '</div>';
+                            if (!issue.blocked && !issue.flagged) {
+                                flagsHtml = '<span style="color:#a5adba;">—</span>';
+                            }
+
+                            rows.push('<tr class="' + rowClass + '" data-group="' + statusKey + '">' +
+                                '<td><a class="issue-key" href="' + baseUrl + '/browse/' + issue.key + '" target="_blank">' + issue.key + '</a></td>' +
+                                '<td><span class="issue-summary" title="' + (issue.summary || '').replace(/"/g, '&quot;') + '">' + (issue.summary || '') + '</span></td>' +
+                                '<td><span class="issue-type ' + typeClass + '">' + (issue.issueType || '') + '</span></td>' +
+                                '<td class="story-points' + spClass + '" style="text-align:right;">' + formatNumber(sp) + '</td>' +
+                                '<td>' + assigneeHtml + '</td>' +
+                                '<td><span class="priority ' + priClass + '">' + (issue.priority || 'None') + '</span></td>' +
+                                '<td>' + flagsHtml + '</td>' +
+                            '</tr>');
+                        });
+                    }
+
+                    // Event listeners
+                    issuesBody.addEventListener('click', function(event) {
+                        var node = event.target;
+                        while (node && node !== issuesBody && !(node.classList && node.classList.contains('status-header'))) {
+                            node = node.parentNode;
+                        }
+                        if (!node || node === issuesBody) return;
+                        var statusKey = node.getAttribute('data-status');
+                        if (!statusKey) return;
+
+                        var expanded = !expandedGroups[statusKey];
+                        expandedGroups[statusKey] = expanded;
+                        var groupRows = issuesBody.querySelectorAll('tr[data-group="' + statusKey + '"]');
+                        for (var i = 0; i < groupRows.length; i++) {
+                            if (expanded) groupRows[i].classList.remove('hidden-row');
+                            else groupRows[i].classList.add('hidden-row');
+                        }
+                        var toggle = node.querySelector('.status-toggle');
+                        if (toggle) toggle.className = 'status-toggle' + (expanded ? '' : ' collapsed');
+                        gadgets.window.adjustHeight();
+                    });
+
+                    sprintSelect.addEventListener('change', function() {
+                        currentSprintId = this.value ? parseInt(this.value) : null;
+                        prefs.set('sprintId', this.value || '');
+                        if (currentSprintId) loadSprintData(currentSprintId);
+                        else {
+                            stopAutoRefresh();
+                            healthSection.style.display = 'none';
+                            tableSection.style.display = 'none';
+                            gadgets.window.adjustHeight();
+                        }
+                    });
+
+                    if (boardSelect) {
+                        boardSelect.addEventListener('change', function() {
+                            currentBoardId = this.value ? this.value : null;
+                            try { prefs.set('boardId', this.value || ''); } catch (e) { /* not persisted */ }
+                            stopAutoRefresh();
+                            healthSection.style.display = 'none';
+                            tableSection.style.display = 'none';
+                            sprintSelect.innerHTML = '<option value="">Loading sprints...</option>';
+                            loadSprints();
+                        });
+                    }
+
+                    if (intervalSelect) {
+                        intervalSelect.addEventListener('change', function() {
+                            applyInterval(this.value, true);
+                        });
+                    }
+
+                    refreshBtn.addEventListener('click', function() {
+                        if (currentSprintId) loadSprintData(currentSprintId);
+                        else loadSprints();
+                    });
+
+                    // Refresh as soon as the tab is visible again, if the data has gone stale
+                    // while the tab was hidden.
+                    document.addEventListener('visibilitychange', function() {
+                        if (document.hidden) return;
+                        if (!currentSprintId || isLoading) return;
+                        if (!refreshIntervalSec || refreshIntervalSec <= 0) return;
+                        if (!lastUpdatedAt) return;
+                        var ageSeconds = (Date.now() - lastUpdatedAt.getTime()) / 1000;
+                        if (ageSeconds >= refreshIntervalSec) loadSprintData(currentSprintId, true);
+                    });
+
+                    // Initial load
+                    loadBoards();
+
+                    // Auto-refresh prefs
+                    window.addEventListener('message', function(event) {
+                        if (event.data && event.data.gadget && event.data.gadget.prefs) {
+                            var newPrefs = event.data.gadget.prefs;
+                            var boardChanged = false;
+                            if (newPrefs.sprintId !== undefined) currentSprintId = newPrefs.sprintId ? parseInt(newPrefs.sprintId) : null;
+                            if (newPrefs.boardId !== undefined) {
+                                var nextBoardId = newPrefs.boardId || null;
+                                boardChanged = String(nextBoardId || '') !== String(currentBoardId || '');
+                                currentBoardId = nextBoardId;
+                            }
+                            showHealth = newPrefs.showHealth !== undefined ? newPrefs.showHealth : true;
+                            showTable = newPrefs.showTable !== undefined ? newPrefs.showTable : true;
+                            groupByStatus = newPrefs.groupByStatus !== undefined ? newPrefs.groupByStatus : true;
+                            if (newPrefs.refreshInterval !== undefined) {
+                                applyInterval(newPrefs.refreshInterval, false);
+                            }
+                            if (boardChanged) loadBoards();
+                        }
+                    });
+                })();
+            </script>
+        </body>
+        </html>
+        ]]>
+    </Content>
+</Module>
