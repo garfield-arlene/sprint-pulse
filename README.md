@@ -35,7 +35,7 @@ cd my-jira-gadget
 mvn package
 ```
 
-The installable plugin is written to `my-jira-gadget/target/sprint-pulse-1.0.0-SNAPSHOT.jar` (an OBR file is also generated).
+The installable plugin is written to `my-jira-gadget/target/sprint-pulse-3.1.0.jar` (an OBR file is also generated).
 
 Run a local Jira instance with the plugin installed:
 
@@ -49,7 +49,7 @@ Jira starts at <http://localhost:2990/jira> with `admin` / `admin`. Use `mvn jir
 
 1. Build the plugin (see above).
 2. In Jira, go to **Administration > Manage apps** (or **Apps > Manage apps**).
-3. Choose **Upload app** and select `target/sprint-pulse-1.0.0-SNAPSHOT.jar`.
+3. Choose **Upload app** and select `target/sprint-pulse-3.1.0.jar`.
 4. Wait for the plugin to install and enable.
 
 ### Manual/offline alternative
