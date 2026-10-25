@@ -29,10 +29,59 @@ A Jira Server/Data Center dashboard gadget that combines the ideas of **Sprint H
 
 ## Requirements
 
-- Jira Software 9.4.0 (the plugin is built against this version)
-- JDK 11
-- Maven 3.8+
-- A Jira project using sprints (Jira Software) and, ideally, a numeric Story Points field
+| Requirement | Version / details |
+| --- | --- |
+| Jira | Jira Software Server/Data Center 9.4.0 (the plugin is built against this version; Jira Core alone is not enough, sprints come from Jira Software) |
+| Java | JDK 11, for both building and running the local Jira. Jira 9.4 supports only Java 8 and 11, so point `JAVA_HOME` at JDK 11 even if a newer Java is the system default |
+| Maven | 3.8 or later (tested with 3.9.11) |
+| Network | Access to Maven Central and `https://packages.atlassian.com/maven-public/` for the first build and the first `jira:run` |
+| Memory | About 2 GB free for the local Jira instance |
+| Jira data | A Jira project using sprints and, ideally, a numeric **Story Points** field |
+| Node.js | 20, optional, only for running the gadget smoke test locally |
+
+No Jira license is needed for local development: `mvn jira:run` installs a developer license automatically.
+
+### One-time Maven setup
+
+`mvn jira:run` downloads the Jira 9.4.0 webapp, whose own build depends on artifacts that only Atlassian hosts. The repositories in `pom.xml` are not used for those, so add the Atlassian repository to `~/.m2/settings.xml`:
+
+```xml
+<settings>
+  <profiles>
+    <profile>
+      <id>atlassian</id>
+      <repositories>
+        <repository>
+          <id>atlassian-public</id>
+          <url>https://packages.atlassian.com/maven-public/</url>
+          <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+      </repositories>
+      <pluginRepositories>
+        <pluginRepository>
+          <id>atlassian-public</id>
+          <url>https://packages.atlassian.com/maven-public/</url>
+          <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+      </pluginRepositories>
+    </profile>
+  </profiles>
+  <activeProfiles>
+    <activeProfile>atlassian</activeProfile>
+  </activeProfiles>
+</settings>
+```
+
+The local Jira's Tomcat also needs `javax.transaction:jta:1.0.1B`, which is not published in any public repository. Install the API-compatible `jta` 1.1 under that version:
+
+```bash
+mvn dependency:get -Dartifact=javax.transaction:jta:1.1
+mvn install:install-file -DgroupId=javax.transaction -DartifactId=jta -Dversion=1.0.1B \
+    -Dpackaging=jar -DgeneratePom=true \
+    -Dfile="$HOME/.m2/repository/javax/transaction/jta/1.1/jta-1.1.jar"
+```
+
+Without these two steps, `mvn jira:run` fails with `Could not find artifact org.apache.maven.wagon:wagon-http:jar:3.3.3-atlassian-03` or `javax.transaction:jta:jar:1.0.1B`.
 
 ## Build
 
@@ -41,15 +90,21 @@ cd my-jira-gadget
 mvn package
 ```
 
-The installable plugin is written to `my-jira-gadget/target/sprint-pulse-<version>.jar` (an OBR file is also generated).
+The installable plugin is written to `my-jira-gadget/target/sprint-pulse-<version>.jar`, for example `sprint-pulse-3.1.0-SNAPSHOT.jar` (an OBR file is also generated).
 
-Run a local Jira instance with the plugin installed:
+## Run a local Jira
+
+From `my-jira-gadget`, with `JAVA_HOME` set to JDK 11:
 
 ```bash
 mvn jira:run
 ```
 
-Jira starts at <http://localhost:2990/jira> with `admin` / `admin`. Use `mvn jira:debug` to start it in debug mode. The first run can take a while because the Jira distribution is downloaded and initialized.
+Jira Software 9.4.0 starts at <http://localhost:2990/jira> with `admin` / `admin` and the plugin already installed. Use `mvn jira:debug` to start it in debug mode (debugger on port 5005).
+
+- The first run takes several minutes because the Jira distribution is downloaded and initialized; later starts take about three minutes.
+- `jira:run` stops Jira as soon as its standard input closes (Ctrl+D, or Ctrl+C), so keep the terminal open. To run it detached, give it an input that never closes: `tail -f /dev/null | mvn jira:run > jira-run.log 2>&1 &`.
+- Jira's home directory and database live in `my-jira-gadget/target/jira`. `mvn clean` deletes them, including any projects, boards and sprints you created for testing.
 
 ## Installation
 
@@ -127,16 +182,12 @@ my-jira-gadget/
         ├── atlassian-plugin.xml
         ├── gadget/my-gadget.xml
         ├── gadget/gadget.properties
-        ├── images/
         └── META-INF/spring/plugin-context.xml
-branding/
 ```
 
 - `SprintGadgetResource.java` — REST endpoints, sprint discovery, health calculations, issue serialization.
 - `my-gadget.xml` — gadget definition, preferences, styles, and client-side rendering.
-- `atlassian-plugin.xml` — plugin descriptor (gadget, REST, and image resource modules).
-- `images/` — the plugin icon and logo, the gadget thumbnail, and the logo shown in the gadget header.
-- `branding/` — logo source files and usage notes (see [branding/README.md](branding/README.md)).
+- `atlassian-plugin.xml` — plugin descriptor (gadget and REST modules).
 - `tests/gadget-smoke-test.js` — runs the gadget JavaScript in a stubbed DOM/fetch sandbox to check loading, auto-refresh, preferences, and the board selector.
 
 ## CI pipeline
