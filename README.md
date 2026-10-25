@@ -1,8 +1,13 @@
-# Sprint Pulse
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="branding/sprint-pulse-logo-dark.svg">
+    <img src="branding/sprint-pulse-logo.svg" alt="Sprint Pulse" width="420">
+  </picture>
+</h1>
 
 A Jira Server/Data Center dashboard gadget that combines the ideas of **Sprint Health** and **Sprint Statistics** into a single view: sprint health metrics at the top, and all sprint issues grouped by status with story points below.
 
-![Sprint Pulse gadget with the board selector open](board-selector.png)
+![Sprint Pulse gadget showing an active sprint: health cards with scope change, blocked and flagged counts, and issues grouped by status](dash-health.png)
 
 ## Features
 
@@ -24,10 +29,59 @@ A Jira Server/Data Center dashboard gadget that combines the ideas of **Sprint H
 
 ## Requirements
 
-- Jira Software 9.4.0 (the plugin is built against this version)
-- JDK 11
-- Maven 3.8+
-- A Jira project using sprints (Jira Software) and, ideally, a numeric Story Points field
+| Requirement | Version / details |
+| --- | --- |
+| Jira | Jira Software Server/Data Center 9.4.0 (the plugin is built against this version; Jira Core alone is not enough, sprints come from Jira Software) |
+| Java | JDK 11, for both building and running the local Jira. Jira 9.4 supports only Java 8 and 11, so point `JAVA_HOME` at JDK 11 even if a newer Java is the system default |
+| Maven | 3.8 or later (tested with 3.9.11) |
+| Network | Access to Maven Central and `https://packages.atlassian.com/maven-public/` for the first build and the first `jira:run` |
+| Memory | About 2 GB free for the local Jira instance |
+| Jira data | A Jira project using sprints and, ideally, a numeric **Story Points** field |
+| Node.js | 20, optional, only for running the gadget smoke test locally |
+
+No Jira license is needed for local development: `mvn jira:run` installs a developer license automatically.
+
+### One-time Maven setup
+
+`mvn jira:run` downloads the Jira 9.4.0 webapp, whose own build depends on artifacts that only Atlassian hosts. The repositories in `pom.xml` are not used for those, so add the Atlassian repository to `~/.m2/settings.xml`:
+
+```xml
+<settings>
+  <profiles>
+    <profile>
+      <id>atlassian</id>
+      <repositories>
+        <repository>
+          <id>atlassian-public</id>
+          <url>https://packages.atlassian.com/maven-public/</url>
+          <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+      </repositories>
+      <pluginRepositories>
+        <pluginRepository>
+          <id>atlassian-public</id>
+          <url>https://packages.atlassian.com/maven-public/</url>
+          <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+      </pluginRepositories>
+    </profile>
+  </profiles>
+  <activeProfiles>
+    <activeProfile>atlassian</activeProfile>
+  </activeProfiles>
+</settings>
+```
+
+The local Jira's Tomcat also needs `javax.transaction:jta:1.0.1B`, which is not published in any public repository. Install the API-compatible `jta` 1.1 under that version:
+
+```bash
+mvn dependency:get -Dartifact=javax.transaction:jta:1.1
+mvn install:install-file -DgroupId=javax.transaction -DartifactId=jta -Dversion=1.0.1B \
+    -Dpackaging=jar -DgeneratePom=true \
+    -Dfile="$HOME/.m2/repository/javax/transaction/jta/1.1/jta-1.1.jar"
+```
+
+Without these two steps, `mvn jira:run` fails with `Could not find artifact org.apache.maven.wagon:wagon-http:jar:3.3.3-atlassian-03` or `javax.transaction:jta:jar:1.0.1B`.
 
 ## Build
 
@@ -36,15 +90,21 @@ cd my-jira-gadget
 mvn package
 ```
 
-The installable plugin is written to `my-jira-gadget/target/sprint-pulse-<version>.jar` (an OBR file is also generated).
+The installable plugin is written to `my-jira-gadget/target/sprint-pulse-<version>.jar`, for example `sprint-pulse-3.1.0-SNAPSHOT.jar` (an OBR file is also generated).
 
-Run a local Jira instance with the plugin installed:
+## Run a local Jira
+
+From `my-jira-gadget`, with `JAVA_HOME` set to JDK 11:
 
 ```bash
 mvn jira:run
 ```
 
-Jira starts at <http://localhost:2990/jira> with `admin` / `admin`. Use `mvn jira:debug` to start it in debug mode. The first run can take a while because the Jira distribution is downloaded and initialized.
+Jira Software 9.4.0 starts at <http://localhost:2990/jira> with `admin` / `admin` and the plugin already installed. Use `mvn jira:debug` to start it in debug mode (debugger on port 5005).
+
+- The first run takes several minutes because the Jira distribution is downloaded and initialized; later starts take about three minutes.
+- `jira:run` stops Jira as soon as its standard input closes (Ctrl+D, or Ctrl+C), so keep the terminal open. To run it detached, give it an input that never closes: `tail -f /dev/null | mvn jira:run > jira-run.log 2>&1 &`.
+- Jira's home directory and database live in `my-jira-gadget/target/jira`. `mvn clean` deletes them, including any projects, boards and sprints you created for testing.
 
 ## Installation
 
@@ -62,9 +122,11 @@ Copy the JAR into `<jira-home>/plugins/installed-plugins/` and restart Jira.
 1. Open or create a dashboard and choose **Add gadget**.
 2. Search for **Sprint Pulse** and add it.
 3. Optionally pick a board from the dropdown next to the sprint list to limit it to a single board (also settable as **Board ID** in the configuration dialog). `All boards` lists sprints from every board you can see. The dropdown hides itself when only one board is available or the board list cannot be loaded, in which case the sprint list keeps working.
+
+   ![Board selector open with All boards and two boards listed](board-selector.png)
 4. Select a sprint from the dropdown. It lists the running sprint, sprints still to come, and the 20 most recent closed sprints on the visible boards. The gadget loads health metrics and issues automatically; the running sprint is preselected, so the gadget shows data as soon as it loads.
 
-   ![Sprint picker with the running sprint selected](sprint-selector.png)
+   ![Sprint picker open with the active sprint selected, plus future and closed sprints](sprint-selector.png)
 5. Click **Refresh** to reload the selected sprint on demand. By default the gadget also refreshes itself every 30 seconds; the last-updated time next to the button shows when the data was fetched. The dropdown next to the button sets the refresh interval (`Auto off`, `Every 30s`, `Every 1m`, `Every 5m`) and is remembered per user.
 
 The selected sprint is saved as a gadget preference. Other preferences (shown in the configuration dialog) include:
