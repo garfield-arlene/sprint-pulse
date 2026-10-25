@@ -6,11 +6,20 @@
         <description>${project.description}</description>
         <version>${project.version}</version>
         <vendor name="Example Corp" url="http://example.com"/>
+        <param name="plugin-icon">images/pluginIcon.png</param>
+        <param name="plugin-logo">images/pluginLogo.png</param>
     </plugin-info>
 
     <gadget key="sprint-pulse" name="Sprint Pulse" location="gadget/my-gadget.xml">
         <description>Sprint health metrics and issues grouped by status with story points — combines Sprint Health and Sprint Statistics</description>
     </gadget>
+
+    <web-resource key="gadget-resources" name="Sprint Pulse gadget resources">
+        <resource type="download" name="thumbnail.png" location="images/thumbnail.png"/>
+        <resource type="download" name="sprint-pulse-logo.svg" location="images/sprint-pulse-logo.svg">
+            <param name="content-type" value="image/svg+xml"/>
+        </resource>
+    </web-resource>
 
     <resource type="i18n" name="i18n" location="gadget"/>
 

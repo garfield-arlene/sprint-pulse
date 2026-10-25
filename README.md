@@ -1,8 +1,13 @@
-# Sprint Pulse
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="branding/sprint-pulse-logo-dark.svg">
+    <img src="branding/sprint-pulse-logo.svg" alt="Sprint Pulse" width="420">
+  </picture>
+</h1>
 
 A Jira Server/Data Center dashboard gadget that combines the ideas of **Sprint Health** and **Sprint Statistics** into a single view: sprint health metrics at the top, and all sprint issues grouped by status with story points below.
 
-![Sprint Pulse gadget with the board selector open](board-selector.png)
+![Sprint Pulse gadget showing an active sprint: health cards with scope change, blocked and flagged counts, and issues grouped by status](dash-health.png)
 
 ## Features
 
@@ -62,9 +67,11 @@ Copy the JAR into `<jira-home>/plugins/installed-plugins/` and restart Jira.
 1. Open or create a dashboard and choose **Add gadget**.
 2. Search for **Sprint Pulse** and add it.
 3. Optionally pick a board from the dropdown next to the sprint list to limit it to a single board (also settable as **Board ID** in the configuration dialog). `All boards` lists sprints from every board you can see. The dropdown hides itself when only one board is available or the board list cannot be loaded, in which case the sprint list keeps working.
+
+   ![Board selector open with All boards and two boards listed](board-selector.png)
 4. Select a sprint from the dropdown. It lists the running sprint, sprints still to come, and the 20 most recent closed sprints on the visible boards. The gadget loads health metrics and issues automatically; the running sprint is preselected, so the gadget shows data as soon as it loads.
 
-   ![Sprint picker with the running sprint selected](sprint-selector.png)
+   ![Sprint picker open with the active sprint selected, plus future and closed sprints](sprint-selector.png)
 5. Click **Refresh** to reload the selected sprint on demand. By default the gadget also refreshes itself every 30 seconds; the last-updated time next to the button shows when the data was fetched. The dropdown next to the button sets the refresh interval (`Auto off`, `Every 30s`, `Every 1m`, `Every 5m`) and is remembered per user.
 
 The selected sprint is saved as a gadget preference. Other preferences (shown in the configuration dialog) include:
@@ -120,12 +127,16 @@ my-jira-gadget/
         ├── atlassian-plugin.xml
         ├── gadget/my-gadget.xml
         ├── gadget/gadget.properties
+        ├── images/
         └── META-INF/spring/plugin-context.xml
+branding/
 ```
 
 - `SprintGadgetResource.java` — REST endpoints, sprint discovery, health calculations, issue serialization.
 - `my-gadget.xml` — gadget definition, preferences, styles, and client-side rendering.
-- `atlassian-plugin.xml` — plugin descriptor (gadget and REST modules).
+- `atlassian-plugin.xml` — plugin descriptor (gadget, REST, and image resource modules).
+- `images/` — the plugin icon and logo, the gadget thumbnail, and the logo shown in the gadget header.
+- `branding/` — logo source files and usage notes (see [branding/README.md](branding/README.md)).
 - `tests/gadget-smoke-test.js` — runs the gadget JavaScript in a stubbed DOM/fetch sandbox to check loading, auto-refresh, preferences, and the board selector.
 
 ## CI pipeline
