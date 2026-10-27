@@ -6,20 +6,24 @@
 #   scripts/dev-jira.sh status   show whether Jira is running
 #   scripts/dev-jira.sh seed     load the test data into a running Jira (if missing)
 #   scripts/dev-jira.sh reset    delete and reload the SP and MOB test projects
+#   scripts/dev-jira.sh fresh    set the current Jira aside and start a brand-new one
 #   scripts/dev-jira.sh logs     follow the Jira log
 #
 # Jira runs at http://localhost:2990/jira (admin / admin). Its data lives in
-# my-jira-gadget/target/jira; this script never deletes it. If it is gone (for example after
-# `mvn clean`), `start` creates a new Jira and loads the test data again.
+# my-jira-gadget/target/jira; this script never deletes it (`fresh` moves it to a backup).
+# If it is gone (for example after `mvn clean`), `start` creates a new Jira and loads the
+# test data again.
 #
 # Works on Linux and on WSL 2. Environment overrides: JAVA_HOME (a JDK 11), START_TIMEOUT
 # (seconds, default 1800), MAVEN_ARGS (extra Maven options, Maven 3.9+).
 set -euo pipefail
 
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# -P resolves symlinks, so a link from the Linux home into /mnt/c is caught by preflight.
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 PLUGIN_DIR=$ROOT/my-jira-gadget
 JIRA_URL=http://localhost:2990/jira
 STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/sprint-pulse
+BACKUP_DIR=$STATE_DIR/backups
 LOG=$STATE_DIR/jira.log
 PID_FILE=$STATE_DIR/jira.pid
 START_TIMEOUT=${START_TIMEOUT:-1800}
@@ -28,6 +32,15 @@ die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '%s\n' "$*"; }
 
 is_wsl() { grep -qi microsoft /proc/version 2>/dev/null; }
+
+# True when the path is a Windows drive mounted into WSL (C:\ appears as /mnt/c over 9P).
+on_windows_fs() {
+    local fstype
+    case "$1" in /mnt/[a-zA-Z]|/mnt/[a-zA-Z]/*) is_wsl && return 0 ;; esac
+    fstype=$(findmnt -n -o FSTYPE -T "$1" 2>/dev/null || stat -f -c %T "$1" 2>/dev/null || true)
+    case "$fstype" in 9p|v9fs|drvfs) return 0 ;; esac
+    return 1
+}
 
 # --- checks -------------------------------------------------------------------------------
 
@@ -66,14 +79,13 @@ preflight() {
     done
     [ ${#missing[@]} -eq 0 ] || die "Missing tools: ${missing[*]}. On Ubuntu/WSL: sudo apt install ${missing[*]}"
 
-    if is_wsl; then
-        case "$ROOT" in
-            /mnt/*) die "The repository is on the Windows file system ($ROOT).
-Jira's database and Maven are very slow there and Jira's file locking fails, which corrupts
-the local Jira. Clone the repository inside WSL instead, for example:
-    git clone https://github.com/garfield-arlene/sprint-pulse.git ~/sprint-pulse
-and run this script from there." ;;
-        esac
+    if on_windows_fs "$ROOT"; then
+        die "The repository is on the Windows file system ($ROOT).
+Under WSL, files there go through a slow network file system: Jira takes 30+ minutes to
+start, usually times out, and its database can be corrupted. Clone the repository inside
+the Linux file system instead, for example:
+    git clone -b dev/test-data https://github.com/garfield-arlene/sprint-pulse.git ~/sprint-pulse
+    cd ~/sprint-pulse && scripts/dev-jira.sh start"
     fi
     if grep -q $'\r' "$ROOT/scripts/seed_test_data.py" "$PLUGIN_DIR/pom.xml" 2>/dev/null; then
         note "WARNING: files in this checkout have Windows (CRLF) line endings. If anything fails, run:"
@@ -146,7 +158,12 @@ explain_failure() {
         note "The wrong Java version was used. Set JAVA_HOME to a JDK 11."
     elif grep -qi 'OutOfMemoryError\|Cannot allocate memory' "$LOG"; then
         note "Jira ran out of memory. Close other programs or give WSL more memory (.wslconfig)."
-    elif grep -qi 'database.*lock\|Lock file' "$LOG"; then
+    elif grep -q 'failed to finish deploying within the timeout' "$LOG"; then
+        note "Jira took too long to start. This happens when the repository is on a slow disk or the"
+        note "Windows file system, or when Jira's database was damaged (for example by editing it by hand)."
+        note "To start over with a brand-new Jira and fresh test data (the current one is kept as a backup):"
+        note "    $0 fresh"
+    elif grep -q 'Database may be already in use\|acquire lock file for jira.home' "$LOG"; then
         note "Jira's database is locked, usually by a Jira that is still running. Run: $0 stop"
     fi
     exit 1
@@ -170,21 +187,24 @@ start_jira() {
         # setsid puts Maven and Jira in their own process group, so `stop` can find them all.
         setsid bash -c 'tail -f /dev/null | exec "$@"' _ \
             "$MVN" -B -ntp -gs "$ROOT/scripts/maven-settings.xml" jira:run -DskipTests \
+            -Dproduct.start.timeout=$((START_TIMEOUT * 1000)) \
             > "$LOG" 2>&1 < /dev/null &
         echo $! > "$PID_FILE"
         cd - >/dev/null
     fi
 
     note "Waiting for Jira (log: $LOG) ..."
-    local waited=0
+    local started=$SECONDS waited=0 reported=0
     until jira_up; do
         our_pgid >/dev/null || { note "Jira stopped while starting."; explain_failure; }
         if grep -q 'BUILD FAILURE' "$LOG" 2>/dev/null; then
             note "Maven reported a build failure."; stop_jira quiet; explain_failure
         fi
         [ "$waited" -ge "$START_TIMEOUT" ] && { note "Jira did not start within ${START_TIMEOUT}s."; explain_failure; }
-        sleep 10; waited=$((waited + 10))
-        [ $((waited % 60)) -eq 0 ] && note "  still starting ($((waited / 60)) min) ..."
+        sleep 10; waited=$((SECONDS - started))
+        if [ $((waited / 60)) -gt "$reported" ]; then
+            reported=$((waited / 60)); note "  still starting ($reported min) ..."
+        fi
     done
     note "Jira is running at $JIRA_URL (admin / admin)."
 }
@@ -216,6 +236,19 @@ stop_jira() {
     [ "${1:-}" = quiet ] || note "Jira stopped."
 }
 
+fresh() {
+    stop_jira quiet
+    if [ -d "$PLUGIN_DIR/target/jira" ]; then
+        local dest
+        dest=$BACKUP_DIR/jira-$(date +%Y%m%d-%H%M%S)
+        mkdir -p "$BACKUP_DIR"
+        note "Moving the current Jira to $dest ..."
+        mv "$PLUGIN_DIR/target/jira" "$dest"
+    fi
+    start_jira
+    seed
+}
+
 seed() {
     python3 "$ROOT/scripts/seed_test_data.py" --url "$JIRA_URL" "$@"
 }
@@ -228,7 +261,9 @@ case "${1:-}" in
             elif our_pgid >/dev/null; then note "Jira is starting (log: $LOG)"
             else note "Jira is not running."; fi ;;
     seed)   jira_up || die "Jira is not running. Use: $0 start"; seed ;;
+    fresh)  preflight; fresh
+            note ""; note "Log in as admin / admin and open the Sprint Pulse dashboard link above." ;;
     reset)  jira_up || die "Jira is not running. Use: $0 start"; seed --reset ;;
     logs)   exec tail -n 100 -f "$LOG" ;;
-    *)      sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *)      sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
