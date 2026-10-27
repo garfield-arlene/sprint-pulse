@@ -15,15 +15,9 @@ import com.atlassian.plugin.Plugin;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -33,16 +27,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.*;
-import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkUtil;
 import org.osgi.framework.ServiceReference;
-import java.util.Arrays;
 
 /**
  * REST resource providing sprint health data and issue details for the Sprint Pulse gadget.
@@ -126,8 +117,7 @@ public class SprintGadgetResource {
     @GET
     @Path("/data")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getSprintData(@Context HttpServletRequest request,
-                                   @QueryParam("sprintId") Long sprintId,
+    public Response getSprintData(@QueryParam("sprintId") Long sprintId,
                                    @QueryParam("boardId") Long boardId) {
         try {
             JsonObject result = new JsonObject();
@@ -144,7 +134,7 @@ public class SprintGadgetResource {
             }
 
             result.add("sprint", buildSprintJson(sprint));
-            result.add("health", buildHealthJson(sprint, request));
+            result.add("health", buildHealthJson(sprint));
             result.add("issuesByStatus", buildIssuesByStatusJson(sprint));
 
             return Response.ok(result.toString()).build();
@@ -160,8 +150,7 @@ public class SprintGadgetResource {
     @GET
     @Path("/sprints")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response getSprints(@Context HttpServletRequest request,
-                                @QueryParam("boardId") Long boardId) {
+    public Response getSprints(@QueryParam("boardId") Long boardId) {
         JsonArray sprints = getAvailableSprints(boardId);
         JsonObject result = new JsonObject();
         result.add("sprints", sprints);
@@ -280,11 +269,12 @@ public class SprintGadgetResource {
 
             List<Object> sprints = new ArrayList<>();
             if (sprintId != null) {
-                // Look the sprint up directly so a sprint without issues still resolves. Board
-                // visibility is not required here: the issues are filtered by the user's search
-                // permissions anyway, exactly as before.
+                // Look the sprint up directly so a sprint without issues still resolves, but only
+                // return it to a user who may see it: otherwise any logged-in user could read the
+                // name, goal and dates of any sprint by guessing its id.
                 Object sprint = outcomeValue(invokeMethod(sprintManager, "getSprint", sprintId));
-                if (sprint != null && (boardId == null || boardId.equals(invokeLong(sprint, "getRapidViewId")))) {
+                if (sprint != null && (boardId == null || boardId.equals(invokeLong(sprint, "getRapidViewId")))
+                    && canSeeSprint(user, rapidViewService, sprint)) {
                     sprints.add(sprint);
                 }
                 return sprints;
@@ -316,6 +306,22 @@ public class SprintGadgetResource {
                 "Could not list sprints through greenhopper, falling back to issue values", e);
             return null;
         }
+    }
+
+    /**
+     * A sprint is visible when the user may see its board, or may see at least one of its
+     * issues. The second case keeps a sprint loading after it leaves a board, or when its board
+     * is shared more narrowly than the issues, without exposing sprints the user has no access to.
+     */
+    private boolean canSeeSprint(ApplicationUser user, Object rapidViewService, Object sprint) {
+        try {
+            Object board = outcomeValue(invokeMethod(rapidViewService, "getRapidView",
+                user, invokeLong(sprint, "getRapidViewId")));
+            if (board != null) return true;
+        } catch (Exception e) {
+            LOG.log(java.util.logging.Level.FINE, "Board visibility check failed", e);
+        }
+        return !getSprintIssues(sprint).isEmpty();
     }
 
     /**
@@ -426,11 +432,7 @@ public class SprintGadgetResource {
         return json;
     }
 
-    private JsonObject buildHealthJson(Object sprint, HttpServletRequest request) {
-        return calculateHealthFallback(sprint, request);
-    }
-
-    private JsonObject calculateHealthFallback(Object sprint, HttpServletRequest request) {
+    private JsonObject buildHealthJson(Object sprint) {
         JsonObject health = new JsonObject();
         List<Issue> issues = getSprintIssues(sprint);
         
@@ -459,7 +461,7 @@ public class SprintGadgetResource {
         }
         
         // Pull authoritative scope change from GreenHopper Sprint Report
-        JsonObject report = fetchSprintReport(rapidViewId, sprintId, request);
+        JsonObject report = fetchSprintReport(rapidViewId, sprintId);
         if (report != null && report.has("contents") && report.get("contents").isJsonObject()) {
             JsonObject contents = report.getAsJsonObject("contents");
             if (contents.has("issueKeysAddedDuringSprint") && contents.get("issueKeysAddedDuringSprint").isJsonObject()) {
@@ -505,7 +507,12 @@ public class SprintGadgetResource {
         return health;
     }
 
-    private JsonObject fetchSprintReport(long rapidViewId, long sprintId, HttpServletRequest request) {
+    /**
+     * The sprint report is built in process only. There is deliberately no fallback to the
+     * greenhopper REST endpoint over HTTP: the plugin makes no network connections of its own.
+     * When the report cannot be built, scope change is reported as zero.
+     */
+    private JsonObject fetchSprintReport(long rapidViewId, long sprintId) {
         if (rapidViewId == 0 || sprintId == 0) return null;
         String cacheKey = rapidViewId + ":" + sprintId;
         CachedSprintReport cached = REPORT_CACHE.get(cacheKey);
@@ -516,9 +523,6 @@ public class SprintGadgetResource {
             REPORT_CACHE.remove(cacheKey, cached);
         }
         JsonObject report = fetchSprintReportInProcess(rapidViewId, sprintId);
-        if (report == null) {
-            report = fetchSprintReportOverHttp(rapidViewId, sprintId, request);
-        }
         if (report != null) {
             REPORT_CACHE.put(cacheKey, new CachedSprintReport(report));
             evictExpiredReports();
@@ -536,7 +540,7 @@ public class SprintGadgetResource {
      * which used to block for up to three seconds on the very thread rendering the gadget.
      *
      * <p>Returns {@code null} when the beans cannot be resolved or the user may not see the
-     * board, in which case the caller falls back to the REST endpoint.
+     * board, in which case no scope change is reported.
      */
     private JsonObject fetchSprintReportInProcess(long rapidViewId, long sprintId) {
         try {
@@ -571,7 +575,7 @@ public class SprintGadgetResource {
             return report;
         } catch (Exception e) {
             LOG.log(java.util.logging.Level.WARNING,
-                "In-process sprint report failed, falling back to the REST endpoint", e);
+                "In-process sprint report failed, scope change is not available", e);
             return null;
         }
     }
@@ -590,7 +594,7 @@ public class SprintGadgetResource {
         Plugin plugin = ComponentAccessor.getPluginAccessor().getPlugin(GREENHOPPER_PLUGIN_KEY);
         if (plugin == null) {
             LOG.log(java.util.logging.Level.WARNING,
-                "GreenHopper plugin " + GREENHOPPER_PLUGIN_KEY + " is not enabled, falling back to the REST endpoint");
+                "GreenHopper plugin " + GREENHOPPER_PLUGIN_KEY + " is not enabled");
             return beans;
         }
         try {
@@ -753,51 +757,6 @@ public class SprintGadgetResource {
             }
         }
         throw new NoSuchMethodException(target.getClass().getName() + "." + methodName + "/" + args.length);
-    }
-
-    private JsonObject fetchSprintReportOverHttp(long rapidViewId, long sprintId, HttpServletRequest request) {
-        try {
-            String baseUrl = null;
-            if (request != null) {
-                int port = request.getServerPort();
-                boolean defaultPort = ("http".equals(request.getScheme()) && port == 80)
-                    || ("https".equals(request.getScheme()) && port == 443);
-                baseUrl = request.getScheme() + "://" + request.getServerName()
-                    + (defaultPort ? "" : ":" + port) + request.getContextPath();
-            }
-            if (baseUrl == null) {
-                baseUrl = ComponentAccessor.getApplicationProperties().getString(com.atlassian.jira.config.properties.APKeys.JIRA_BASEURL);
-            }
-            if (baseUrl == null) baseUrl = "http://localhost:2990/jira";
-            baseUrl = baseUrl.replaceAll("/$", "");
-            URL url = new URL(baseUrl + "/rest/greenhopper/1.0/rapid/charts/sprintreport?rapidViewId=" + rapidViewId + "&sprintId=" + sprintId);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setRequestProperty("Accept", "application/json");
-            conn.setConnectTimeout(3000);
-            conn.setReadTimeout(3000);
-            if (request != null) {
-                String cookie = request.getHeader("Cookie");
-                if (cookie != null) conn.setRequestProperty("Cookie", cookie);
-                String authorization = request.getHeader("Authorization");
-                if (authorization != null) conn.setRequestProperty("Authorization", authorization);
-            }
-            int code = conn.getResponseCode();
-            if (code < 200 || code >= 300) {
-                LOG.log(java.util.logging.Level.WARNING, "fetchSprintReport HTTP " + code + " for " + url);
-                return null;
-            }
-            java.io.InputStream is = conn.getInputStream();
-            StringBuilder sb = new StringBuilder();
-            BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
-            String line;
-            while ((line = br.readLine()) != null) sb.append(line);
-            br.close();
-            return new JsonParser().parse(sb.toString()).getAsJsonObject();
-        } catch (Exception e) {
-            LOG.log(java.util.logging.Level.WARNING, "fetchSprintReportOverHttp failed", e);
-            return null;
-        }
     }
 
     /**

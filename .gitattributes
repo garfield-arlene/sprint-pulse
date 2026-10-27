@@ -1,0 +1,4 @@
+# Keep Unix line endings for scripts, even on Windows checkouts with core.autocrlf=true,
+# so they run in WSL and Linux.
+*.sh text eol=lf
+*.py text eol=lf

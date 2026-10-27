@@ -405,6 +405,23 @@
                         return colors[Math.abs(hash) % colors.length];
                     }
 
+                    // Jira data (summaries, names, statuses, error text) is user-controlled, so it is
+                    // escaped before it goes into markup, both as element text and attribute values.
+                    function escapeHtml(value) {
+                        return String(value === null || value === undefined ? '' : value)
+                            .replace(/&/g, '&amp;')
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;')
+                            .replace(/"/g, '&quot;')
+                            .replace(/'/g, '&#39;');
+                    }
+
+                    // Looks up a CSS class by name without picking up inherited properties such as
+                    // "constructor" when a status or type happens to use that name.
+                    function classFor(map, name, fallback) {
+                        return Object.prototype.hasOwnProperty.call(map, name) ? map[name] : fallback;
+                    }
+
                     function formatNumber(num) {
                         if (num === null || num === undefined) return '—';
                         return num % 1 === 0 ? num.toString() : num.toFixed(1);
@@ -423,7 +440,7 @@
                         healthSection.style.display = 'none';
                         tableSection.style.display = 'none';
                         document.getElementById('gadget').innerHTML = 
-                            '<div class="section"><div class="section-content"><div class="error">' + msg + '</div></div></div>' +
+                            '<div class="section"><div class="section-content"><div class="error">' + escapeHtml(msg) + '</div></div></div>' +
                             '<div class="section" style="padding-top:8px;"><div class="section-content"><button class="refresh-btn" onclick="location.reload()">Retry</button></div></div>';
                         gadgets.window.adjustHeight();
                     }
@@ -647,8 +664,8 @@
                     }
 
                     function renderStatusGroup(status, issues, rows, totalSp) {
-                        var badgeClass = statusBadgeClass[status.toLowerCase()] || 'default';
-                        var statusKey = status.toLowerCase().replace(/\s+/g, '-');
+                        var badgeClass = classFor(statusBadgeClass, status.toLowerCase(), 'default');
+                        var statusKey = status.toLowerCase().replace(/[^a-z0-9]+/g, '-');
                         var expanded = !!expandedGroups[statusKey];
                         var groupSp = sumStoryPoints(issues);
                         var share = totalSp > 0 ? Math.round((groupSp / totalSp) * 100) : 0;
@@ -659,7 +676,7 @@
                                 '<div class="status-header-inner">' +
                                     '<span class="status-header-left">' +
                                         '<span class="status-toggle' + (expanded ? '' : ' collapsed') + '">▾</span> ' +
-                                        '<span class="status-badge ' + badgeClass + '">' + status + '</span>' +
+                                        '<span class="status-badge ' + badgeClass + '">' + escapeHtml(status) + '</span>' +
                                     '</span>' +
                                     '<span class="status-header-stats">' +
                                         '<span><strong>' + issues.length + '</strong> issues</span>' +
@@ -670,23 +687,23 @@
                             '</td></tr>');
                         
                         issues.forEach(function(issue) {
-                            var typeClass = issueTypeClass[issue.issueType.toLowerCase()] || 'default';
+                            var typeClass = classFor(issueTypeClass, (issue.issueType || '').toLowerCase(), 'default');
                             var priority = (issue.priority || 'none').toLowerCase();
-                            var priClass = priorityClass[priority] || 'none';
+                            var priClass = classFor(priorityClass, priority, 'none');
                             var sp = issue.storyPoints || 0;
                             var spClass = sp > 0 ? '' : ' zero';
                             
                             var assigneeHtml = issue.assignee && issue.assignee !== 'Unassigned' 
-                                ? '<span class="assignee"><span class="assignee-avatar" style="background:' + getAvatarColor(issue.assignee) + '">' + getInitials(issue.assignee) + '</span>' + issue.assignee + '</span>'
+                                ? '<span class="assignee"><span class="assignee-avatar" style="background:' + getAvatarColor(issue.assignee) + '">' + escapeHtml(getInitials(issue.assignee)) + '</span>' + escapeHtml(issue.assignee) + '</span>'
                                 : '<span style="color:#a5adba;">Unassigned</span>';
 
                             // Build flags
                             var flagsHtml = '<div class="issue-flags">';
                             if (issue.blocked) {
-                                flagsHtml += '<span class="flag-badge blocked" title="' + (issue.blockedReason || 'Blocked').replace(/"/g, '&quot;') + '"><span class="flag-icon">🔗</span> Blocked</span>';
+                                flagsHtml += '<span class="flag-badge blocked" title="' + escapeHtml(issue.blockedReason || 'Blocked') + '"><span class="flag-icon">🔗</span> Blocked</span>';
                             }
                             if (issue.flagged) {
-                                flagsHtml += '<span class="flag-badge flagged" title="' + (issue.flaggedReason || 'Flagged').replace(/"/g, '&quot;') + '"><span class="flag-icon">🚩</span> Flagged</span>';
+                                flagsHtml += '<span class="flag-badge flagged" title="' + escapeHtml(issue.flaggedReason || 'Flagged') + '"><span class="flag-icon">🚩</span> Flagged</span>';
                             }
                             flagsHtml += '</div>';
                             if (!issue.blocked && !issue.flagged) {
@@ -694,12 +711,12 @@
                             }
 
                             rows.push('<tr class="' + rowClass + '" data-group="' + statusKey + '">' +
-                                '<td><a class="issue-key" href="' + baseUrl + '/browse/' + issue.key + '" target="_blank">' + issue.key + '</a></td>' +
-                                '<td><span class="issue-summary" title="' + (issue.summary || '').replace(/"/g, '&quot;') + '">' + (issue.summary || '') + '</span></td>' +
-                                '<td><span class="issue-type ' + typeClass + '">' + (issue.issueType || '') + '</span></td>' +
+                                '<td><a class="issue-key" href="' + escapeHtml(baseUrl + '/browse/' + encodeURIComponent(issue.key)) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(issue.key) + '</a></td>' +
+                                '<td><span class="issue-summary" title="' + escapeHtml(issue.summary) + '">' + escapeHtml(issue.summary) + '</span></td>' +
+                                '<td><span class="issue-type ' + typeClass + '">' + escapeHtml(issue.issueType) + '</span></td>' +
                                 '<td class="story-points' + spClass + '" style="text-align:right;">' + formatNumber(sp) + '</td>' +
                                 '<td>' + assigneeHtml + '</td>' +
-                                '<td><span class="priority ' + priClass + '">' + (issue.priority || 'None') + '</span></td>' +
+                                '<td><span class="priority ' + priClass + '">' + escapeHtml(issue.priority || 'None') + '</span></td>' +
                                 '<td>' + flagsHtml + '</td>' +
                             '</tr>');
                         });

@@ -90,21 +90,36 @@ cd my-jira-gadget
 mvn package
 ```
 
-The installable plugin is written to `my-jira-gadget/target/sprint-pulse-<version>.jar`, for example `sprint-pulse-3.1.0-SNAPSHOT.jar` (an OBR file is also generated).
+The installable plugin is written to `my-jira-gadget/target/sprint-pulse-<version>.jar`, for example `sprint-pulse-3.1.1-SNAPSHOT.jar` (an OBR file is also generated).
 
 ## Run a local Jira
 
-From `my-jira-gadget`, with `JAVA_HOME` set to JDK 11:
+`scripts/dev-jira.sh` starts a local Jira Software 9.4.0 with the plugin installed and loads a set of test data. It works on Linux and on Windows under WSL 2:
 
 ```bash
-mvn jira:run
+scripts/dev-jira.sh start    # start Jira and load the test data if it is missing
+scripts/dev-jira.sh stop     # stop Jira cleanly
+scripts/dev-jira.sh status   # is Jira running?
+scripts/dev-jira.sh seed     # load the test data into a running Jira if it is missing
+scripts/dev-jira.sh reset    # delete the test projects and load them again
+scripts/dev-jira.sh fresh    # set the current Jira aside and start a brand-new one
+scripts/dev-jira.sh logs     # follow the Jira log
 ```
 
-Jira Software 9.4.0 starts at <http://localhost:2990/jira> with `admin` / `admin` and the plugin already installed. Use `mvn jira:debug` to start it in debug mode (debugger on port 5005).
+Jira runs at <http://localhost:2990/jira>; log in as `admin` / `admin` and open the **Sprint Pulse** dashboard. The first start downloads Jira and takes 10 minutes or more; later starts take about three minutes.
 
-- The first run takes several minutes because the Jira distribution is downloaded and initialized; later starts take about three minutes.
-- `jira:run` stops Jira as soon as its standard input closes (Ctrl+D, or Ctrl+C), so keep the terminal open. To run it detached, give it an input that never closes: `tail -f /dev/null | mvn jira:run > jira-run.log 2>&1 &`.
-- Jira's home directory and database live in `my-jira-gadget/target/jira`. `mvn clean` deletes them, including any projects, boards and sprints you created for testing.
+The script needs JDK 11, Maven, Python 3 and curl. It finds JDK 11 by itself (or uses `JAVA_HOME`), adds the Atlassian Maven repository for its own Maven runs and installs the `jta` artifact described above, so the one-time Maven setup is not needed when you use it. On WSL, keep the repository in the Linux file system (for example `~/sprint-pulse`), not under `/mnt/c` or a link into it: on the Windows file system Jira takes 30 minutes or more to start, usually times out, and its database can be damaged, so the script refuses to run there.
+
+The test data, with sprint dates set relative to the day it is loaded:
+
+| Project | Board | Sprints |
+| --- | --- | --- |
+| Sprint Pulse Test (SP) | SP board | SP Sprint 0 (closed), SP Sprint 1 (active: 21 points committed, 8 completed, 3 added, 5 removed, one blocked and one flagged issue), SP Sprint 2 (future) |
+| Mobile App (MOB) | MOB board | MOB Sprint 1 (closed), MOB Sprint 2 (active, one flagged issue), MOB Sprint 3 (future) |
+
+Loading is safe to repeat: projects that are already loaded are left alone, a load that was interrupted is redone, and existing projects that the script did not create are never changed. Jira's data lives in `my-jira-gadget/target/jira`, so `mvn clean` deletes it; the next `scripts/dev-jira.sh start` then creates a new Jira and loads the test data again. If the local Jira no longer starts, `scripts/dev-jira.sh fresh` moves it to `~/.local/state/sprint-pulse/backups` and starts a brand-new one with the test data.
+
+To run Jira by hand instead, run `mvn jira:run` (or `mvn jira:debug`, debugger on port 5005) from `my-jira-gadget` with `JAVA_HOME` set to JDK 11. `jira:run` stops Jira as soon as its standard input closes, so keep that terminal open.
 
 ## Installation
 
@@ -169,7 +184,7 @@ Example:
 curl -u user:token "https://jira.example.com/rest/sprint/1.0/data?sprintId=1"
 ```
 
-Sprints are discovered through the GreenHopper (Jira Software) Spring beans, located via the application context that GreenHopper publishes as an OSGi service: `SprintManager` for single sprint lookups and `RapidViewService` (`getRapidViews`/`getRapidView` + `getSprintsForView`) for board lists. Board visibility and `isSprintSupportEnabled` are honoured, so Kanban boards are excluded. If GreenHopper is unavailable, the gadget falls back to the **Sprint** custom field on issues visible to the current user (`sprint is not EMPTY`). Single-sprint lookups by `sprintId` are not gated by board visibility, so a sprint keeps loading after it leaves a board. Sprint reports are generated in-process and cached for 30 seconds (up to 20 sprints) to keep auto-refresh cheap.
+Sprints are discovered through the GreenHopper (Jira Software) Spring beans, located via the application context that GreenHopper publishes as an OSGi service: `SprintManager` for single sprint lookups and `RapidViewService` (`getRapidViews`/`getRapidView` + `getSprintsForView`) for board lists. Board visibility and `isSprintSupportEnabled` are honoured, so Kanban boards are excluded. If GreenHopper is unavailable, the gadget falls back to the **Sprint** custom field on issues visible to the current user (`sprint is not EMPTY`). Single-sprint lookups by `sprintId` return the sprint only when the user can see its board or at least one of its issues, so a sprint keeps loading after it leaves a board without exposing sprints the user has no access to. Sprint reports are generated in-process, with no HTTP fallback, and cached for 30 seconds (up to 20 sprints) to keep auto-refresh cheap.
 
 ## Project structure
 
@@ -189,6 +204,7 @@ my-jira-gadget/
 - `my-gadget.xml` — gadget definition, preferences, styles, and client-side rendering.
 - `atlassian-plugin.xml` — plugin descriptor (gadget and REST modules).
 - `tests/gadget-smoke-test.js` — runs the gadget JavaScript in a stubbed DOM/fetch sandbox to check loading, auto-refresh, preferences, and the board selector.
+- `scripts/dev-jira.sh` — starts and stops the local Jira; `scripts/seed_test_data.py` loads the test data into it.
 
 ## CI pipeline
 
