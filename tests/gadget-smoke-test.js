@@ -118,7 +118,7 @@ function boot(options) {
             const match = /boardId=(\d+)/.exec(url);
             return ok({ sprints: match ? sprintsForBoard(parseInt(match[1], 10)) : sprintsForBoard(5) });
         }
-        return ok(SPRINT_DATA);
+        return ok(opts.data || SPRINT_DATA);
     }
 
     const document = {
@@ -319,11 +319,44 @@ async function boardsUnavailableScenario() {
     assert(app.dataCalls() === 1, 'sprint list and data still load (got ' + app.dataCalls() + ')');
 }
 
+async function escapingScenario() {
+    section('Jira data is escaped before rendering');
+    const payload = '<img src=x onerror="alert(1)">';
+    const app = boot({
+        data: Object.assign({}, SPRINT_DATA, {
+            issuesByStatus: {
+                ['<b>Status</b>']: [{
+                    key: 'SP-1"><script>', summary: payload, issueType: '<i>Story</i>', storyPoints: 1,
+                    statusCategory: 'new', assignee: '<u>Eve</u> "Q"', priority: '<s>High</s>',
+                    blocked: true, blockedReason: 'Blocked by SP-2: "' + payload + '"'
+                }]
+            }
+        })
+    });
+    await sleep(100);
+    const html = app.elements.issuesBody.innerHTML;
+    assert(html.length > 0, 'issue table rendered');
+    assert(html.indexOf('<img') === -1 && html.indexOf('<script>') === -1 && html.indexOf('<b>') === -1
+        && html.indexOf('<i>') === -1 && html.indexOf('<u>') === -1 && html.indexOf('<s>') === -1,
+        'no Jira-supplied markup reaches the table');
+    assert(html.indexOf('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;') !== -1, 'summary shown as text');
+    assert(html.indexOf('/browse/SP-1%22%3E%3Cscript%3E"') !== -1,
+        'issue key encoded in the link');
+
+    app.sandbox.fetch = () => Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve('<img src=x>') });
+    app.elements.refreshBtn.handlers['click']();
+    await sleep(60);
+    const errorHtml = app.elements.gadget.innerHTML;
+    assert(errorHtml.indexOf('<img') === -1 && errorHtml.indexOf('&lt;img src=x&gt;') !== -1,
+        'error text from the server is escaped');
+}
+
 (async () => {
     await storedBoardScenario();
     await staleBoardScenario();
     await singleBoardScenario();
     await boardsUnavailableScenario();
+    await escapingScenario();
     console.log(failures ? 'SMOKE TEST: ' + failures + ' FAILURE(S)' : 'SMOKE TEST: ALL PASSED');
     process.exitCode = failures ? 1 : 0;
 })();
