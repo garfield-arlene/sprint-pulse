@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Global Maven settings used by scripts/dev-jira.sh (passed with -gs).
+
+  mvn jira:run needs artifacts that only Atlassian's repository hosts. Passing this file as the
+  global settings adds that repository without editing ~/.m2/settings.xml; your own user settings
+  (mirrors, proxies, credentials) still apply on top of it.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd">
+  <mirrors>
+    <!-- Same HTTP blocker as Maven's default global settings, which this file replaces. -->
+    <mirror>
+      <id>maven-default-http-blocker</id>
+      <mirrorOf>external:http:*</mirrorOf>
+      <name>Pseudo repository to mirror external repositories initially using HTTP.</name>
+      <url>http://0.0.0.0/</url>
+      <blocked>true</blocked>
+    </mirror>
+  </mirrors>
+  <profiles>
+    <profile>
+      <id>sprint-pulse-atlassian</id>
+      <repositories>
+        <repository>
+          <id>atlassian-public</id>
+          <url>https://packages.atlassian.com/maven-public/</url>
+          <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+      </repositories>
+      <pluginRepositories>
+        <pluginRepository>
+          <id>atlassian-public</id>
+          <url>https://packages.atlassian.com/maven-public/</url>
+          <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+      </pluginRepositories>
+    </profile>
+  </profiles>
+  <activeProfiles>
+    <activeProfile>sprint-pulse-atlassian</activeProfile>
+  </activeProfiles>
+</settings>
