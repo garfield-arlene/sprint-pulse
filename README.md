@@ -90,7 +90,7 @@ cd my-jira-gadget
 mvn package
 ```
 
-The installable plugin is written to `my-jira-gadget/target/sprint-pulse-<version>.jar`, for example `sprint-pulse-3.1.1-SNAPSHOT.jar` (an OBR file is also generated).
+The installable plugin is written to `my-jira-gadget/target/sprint-pulse-<version>.jar`, for example `sprint-pulse-3.1.2-SNAPSHOT.jar` (an OBR file is also generated).
 
 ## Run a local Jira
 
