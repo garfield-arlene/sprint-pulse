@@ -31,8 +31,8 @@ A Jira Server/Data Center dashboard gadget that combines the ideas of **Sprint H
 
 | Requirement | Version / details |
 | --- | --- |
-| Jira | Jira Software Server/Data Center 9.4.0 (the plugin is built against this version; Jira Core alone is not enough, sprints come from Jira Software) |
-| Java | JDK 11, for both building and running the local Jira. Jira 9.4 supports only Java 8 and 11, so point `JAVA_HOME` at JDK 11 even if a newer Java is the system default |
+| Jira | Jira Software Server/Data Center 9.4 or Data Center 10.3 LTS. The plugin is built against 9.4.0, and the same jar runs unchanged on 10.3 (tested on 10.3.26). Jira Core alone is not enough, sprints come from Jira Software |
+| Java | JDK 11, for both building and running the local Jira 9.4. Jira 9.4 supports only Java 8 and 11, so point `JAVA_HOME` at JDK 11 even if a newer Java is the system default. A Jira 10.3 server runs on Java 17 and loads the plugin as is |
 | Maven | 3.8 or later (tested with 3.9.11) |
 | Network | Access to Maven Central and `https://packages.atlassian.com/maven-public/` for the first build and the first `jira:run` |
 | Memory | About 2 GB free for the local Jira instance |
@@ -127,6 +127,8 @@ To run Jira by hand instead, run `mvn jira:run` (or `mvn jira:debug`, debugger o
 2. In Jira, go to **Administration > Manage apps** (or **Apps > Manage apps**).
 3. Choose **Upload app** and select `target/sprint-pulse-<version>.jar`.
 4. Wait for the plugin to install and enable.
+
+The same jar installs on Jira 9.4 and Jira 10.3.
 
 ### Manual/offline alternative
 
