@@ -2,12 +2,22 @@ name: Build
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing v* tag to publish (leave empty for a build only)"
+        required: false
+        type: string
   push:
     branches:
       - "**"
+    tags:
+      - "v*"
 
 permissions:
   contents: read
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
 
 concurrency:
   group: build-${{ github.ref }}
@@ -20,12 +30,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
-      - name: Set up JDK 11
+      - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "11"
+          java-version: "17"
           cache: maven
 
       - name: Validate Maven project
@@ -84,6 +96,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Scan dependencies and secrets with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
@@ -103,13 +117,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
-      - name: Set up JDK 11
+      - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "11"
+          java-version: "17"
           cache: maven
+
+      - name: Set release version
+        if: env.RELEASE_TAG != ''
+        working-directory: my-jira-gadget
+        shell: bash
+        run: |
+          release_version="${RELEASE_TAG#v}"
+          if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          mvn -B -ntp org.codehaus.mojo:versions-maven-plugin:2.23.0:set \
+            -DnewVersion="$release_version" \
+            -DgenerateBackupPoms=false
 
       - name: Build plugin
         working-directory: my-jira-gadget
@@ -123,3 +153,28 @@ jobs:
             my-jira-gadget/target/sprint-pulse-*.jar
             my-jira-gadget/target/sprint-pulse-*.obr
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download plugin artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sprint-pulse-plugin
+          path: release-assets
+
+      - name: Attach JAR to GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/*.jar --clobber
