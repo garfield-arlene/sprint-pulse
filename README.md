@@ -123,10 +123,13 @@ To run Jira by hand instead, run `mvn jira:run` (or `mvn jira:debug`, debugger o
 
 ## Installation
 
-1. Build the plugin (see above).
-2. In Jira, go to **Administration > Manage apps** (or **Apps > Manage apps**).
-3. Choose **Upload app** and select `target/sprint-pulse-<version>.jar`.
-4. Wait for the plugin to install and enable.
+1. Open the [latest Sprint Pulse release](https://github.com/garfield-arlene/sprint-pulse/releases/latest).
+2. Under **Assets**, download `sprint-pulse-<version>.jar`. Do not download the source code `.zip` or `.tar.gz`; Jira cannot install those archives.
+3. In Jira, go to **Administration > Manage apps** (or **Apps > Manage apps**).
+4. Choose **Upload app** and select the downloaded JAR.
+5. Wait for the plugin to install and enable.
+
+Developers building from source can instead run `mvn package` in `my-jira-gadget` and upload the JAR from `my-jira-gadget/target`.
 
 The same jar installs on Jira 9.4 and Jira 10.3.
 
@@ -215,7 +218,7 @@ The GitHub Actions workflow in `.github/workflows/build.yml` runs automatically 
 - **Lint** — validates the Maven project and XML descriptors, syntax-checks the gadget JavaScript, smoke-tests it against a stubbed DOM, and runs Checkstyle (report uploaded as the `checkstyle-report` artifact).
 - **Security scan** — runs Trivy against dependencies and the repository for `CRITICAL`/`HIGH` vulnerabilities and secrets.
 
-The build job then packages the plugin and uploads the JAR and OBR as the `sprint-pulse-plugin` artifact.
+The build job then packages the plugin and uploads the JAR and OBR as the `sprint-pulse-plugin` workflow artifact. A push of a `v*` tag also creates or updates the matching GitHub release and attaches the versioned JAR under **Assets**. To repair an existing tagged release, run the workflow manually and enter its tag (for example, `v3.1.2`) in **Existing v* tag to publish**.
 
 ## Development notes
 
