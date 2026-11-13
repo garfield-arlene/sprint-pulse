@@ -17,7 +17,8 @@ const SPRINT_DATA = {
     sprint: { id: 5, name: 'Sprint 1', state: 'ACTIVE' },
     health: {
         committedStoryPoints: 31, completedStoryPoints: 11, addedStoryPoints: 3,
-        removedStoryPoints: 2, totalIssues: 9, completedIssues: 3,
+        removedStoryPoints: 2, carriedOverStoryPoints: 8, carriedOverIssues: 2,
+        totalIssues: 9, completedIssues: 3,
         completionPercent: 35, issueCompletionPercent: 33
     },
     issuesByStatus: {
@@ -196,8 +197,21 @@ async function storedBoardScenario() {
         'initial load fetched the board list first (got ' + app.fetches[0] + ')');
     assert(app.fetches.some(u => u.indexOf('/sprints?boardId=5') !== -1), 'sprint list loaded for the stored board');
     assert(app.dataCalls() === 1, 'initial load fetched sprint data once (got ' + app.dataCalls() + ')');
-    assert(app.elements.healthGrid.children.length === 8,
-        'health grid rendered 8 cards (got ' + app.elements.healthGrid.children.length + ')');
+    assert(app.elements.healthGrid.children.length === 7,
+        'health grid rendered 7 cards (got ' + app.elements.healthGrid.children.length + ')');
+    assert(app.elements.healthGrid.children[1].innerHTML.indexOf('11<span') !== -1
+        && app.elements.healthGrid.children[1].innerHTML.indexOf('Completed') !== -1
+        && app.elements.healthGrid.children[1].innerHTML.indexOf('35<span') !== -1
+        && app.elements.healthGrid.children[1].innerHTML.indexOf('Completion') !== -1,
+        'completion card shows completed story points and percentage');
+    assert(app.elements.healthGrid.children[2].innerHTML.indexOf('3<span') !== -1
+        && app.elements.healthGrid.children[2].innerHTML.indexOf('Added') !== -1
+        && app.elements.healthGrid.children[2].innerHTML.indexOf('2<span') !== -1
+        && app.elements.healthGrid.children[2].innerHTML.indexOf('Removed') !== -1,
+        'scope change card shows added and removed story points');
+    assert(app.elements.healthGrid.children[3].innerHTML.indexOf('2<span') !== -1
+        && app.elements.healthGrid.children[3].innerHTML.indexOf('8 Story Points') !== -1,
+        'carryover card shows issue and story-point counts');
     assert(/^Updated /.test(app.elements.lastUpdated.textContent),
         'last-updated label populated: "' + app.elements.lastUpdated.textContent + '"');
     assert(app.elements.progressPercent.textContent.indexOf('35%') === 0,

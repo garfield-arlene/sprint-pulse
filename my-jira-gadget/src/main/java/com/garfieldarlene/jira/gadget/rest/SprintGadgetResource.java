@@ -438,12 +438,16 @@ public class SprintGadgetResource {
         
         CustomField storyPointsField = getStoryPointsField();
         double committed = 0, completed = 0, added = 0, removed = 0;
+        double carriedOver = 0;
         int totalIssues = issues.size();
         int completedIssues = 0;
         int addedIssues = 0;
         int removedIssues = 0;
+        int carriedOverIssues = 0;
         long sprintId = invokeLong(sprint, "getId");
         long rapidViewId = invokeLong(sprint, "getRapidViewId");
+        long previousSprintId = previousSprintId(sprint);
+        CustomField sprintField = getSprintCustomField();
         
         Map<String, Double> spByKey = new HashMap<>();
         for (Issue issue : issues) {
@@ -457,6 +461,10 @@ public class SprintGadgetResource {
                 }
             } else if (isDone(issue)) {
                 completedIssues++;
+            }
+            if (wasInSprint(issue, sprintField, previousSprintId)) {
+                carriedOverIssues++;
+                if (sp != null) carriedOver += sp;
             }
         }
         
@@ -497,14 +505,65 @@ public class SprintGadgetResource {
         health.addProperty("completedStoryPoints", completed);
         health.addProperty("addedStoryPoints", added);
         health.addProperty("removedStoryPoints", removed);
+        health.addProperty("carriedOverStoryPoints", carriedOver);
         health.addProperty("totalIssues", totalIssues);
         health.addProperty("completedIssues", completedIssues);
         health.addProperty("addedIssues", addedIssues);
         health.addProperty("removedIssues", removedIssues);
+        health.addProperty("carriedOverIssues", carriedOverIssues);
         health.addProperty("completionPercent", committed > 0 ? Math.round((completed / committed) * 100) : 0);
         health.addProperty("issueCompletionPercent", totalIssues > 0 ? Math.round((completedIssues / (double) totalIssues) * 100) : 0);
         
         return health;
+    }
+
+    /**
+     * Finds the sprint immediately before this one on the same board. Jira Software sequences
+     * sprints per board, so sequence is more reliable than planned dates when sprints overlap or
+     * finish late. The date fallback supports older or partially populated sprint values.
+     */
+    private long previousSprintId(Object sprint) {
+        long rapidViewId = invokeLong(sprint, "getRapidViewId");
+        long currentSequence = invokeLong(sprint, "getSequence");
+        long currentStart = invokeDateTime(sprint, "getActivatedDate");
+        if (currentStart == 0L) currentStart = invokeDateTime(sprint, "getStartDate");
+        if (rapidViewId == 0L) return 0L;
+
+        Object previous = null;
+        long previousSequence = Long.MIN_VALUE;
+        long previousEnd = Long.MIN_VALUE;
+        for (Object candidate : findSprints(null, rapidViewId)) {
+            if (!"CLOSED".equals(invokeEnumName(candidate, "getState"))) continue;
+            if (invokeLong(candidate, "getId").equals(invokeLong(sprint, "getId"))) continue;
+
+            long sequence = invokeLong(candidate, "getSequence");
+            if (currentSequence > 0L && sequence > 0L) {
+                if (sequence < currentSequence && sequence > previousSequence) {
+                    previous = candidate;
+                    previousSequence = sequence;
+                }
+                continue;
+            }
+
+            long end = invokeDateTime(candidate, "getCompleteDate");
+            if (end == 0L) end = sprintEndTime(candidate);
+            if ((currentStart == 0L || end <= currentStart) && end > previousEnd) {
+                previous = candidate;
+                previousEnd = end;
+            }
+        }
+        return previous != null ? invokeLong(previous, "getId") : 0L;
+    }
+
+    /** Jira retains completed sprint values on an issue when it is moved into a later sprint. */
+    private boolean wasInSprint(Issue issue, CustomField sprintField, long sprintId) {
+        if (sprintField == null || sprintId == 0L) return false;
+        Object value = issue.getCustomFieldValue(sprintField);
+        if (!(value instanceof Collection)) return false;
+        for (Object issueSprint : (Collection<?>) value) {
+            if (invokeLong(issueSprint, "getId") == sprintId) return true;
+        }
+        return false;
     }
 
     /**
