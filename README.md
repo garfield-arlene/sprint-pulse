@@ -31,8 +31,8 @@ A Jira Server/Data Center dashboard gadget that combines the ideas of **Sprint H
 
 | Requirement | Version / details |
 | --- | --- |
-| Jira | Jira Software Server/Data Center 9.4.0 (the plugin is built against this version; Jira Core alone is not enough, sprints come from Jira Software) |
-| Java | JDK 11, for both building and running the local Jira. Jira 9.4 supports only Java 8 and 11, so point `JAVA_HOME` at JDK 11 even if a newer Java is the system default |
+| Jira | Jira Software Data Center 10.3.26 LTS. Jira Core alone is not enough; sprints come from Jira Software |
+| Java | JDK 17 for building and running Jira 10.3.26 |
 | Maven | 3.8 or later (tested with 3.9.11) |
 | Network | Access to Maven Central and `https://packages.atlassian.com/maven-public/` for the first build and the first `jira:run` |
 | Memory | About 2 GB free for the local Jira instance |
@@ -43,7 +43,7 @@ No Jira license is needed for local development: `mvn jira:run` installs a devel
 
 ### One-time Maven setup
 
-`mvn jira:run` downloads the Jira 9.4.0 webapp, whose own build depends on artifacts that only Atlassian hosts. The repositories in `pom.xml` are not used for those, so add the Atlassian repository to `~/.m2/settings.xml`:
+`mvn jira:run` downloads the Jira 10.3.26 webapp, whose own build depends on artifacts that only Atlassian hosts. The repositories in `pom.xml` are not used for those, so add the Atlassian repository to `~/.m2/settings.xml`:
 
 ```xml
 <settings>
@@ -72,16 +72,7 @@ No Jira license is needed for local development: `mvn jira:run` installs a devel
 </settings>
 ```
 
-The local Jira's Tomcat also needs `javax.transaction:jta:1.0.1B`, which is not published in any public repository. Install the API-compatible `jta` 1.1 under that version:
-
-```bash
-mvn dependency:get -Dartifact=javax.transaction:jta:1.1
-mvn install:install-file -DgroupId=javax.transaction -DartifactId=jta -Dversion=1.0.1B \
-    -Dpackaging=jar -DgeneratePom=true \
-    -Dfile="$HOME/.m2/repository/javax/transaction/jta/1.1/jta-1.1.jar"
-```
-
-Without these two steps, `mvn jira:run` fails with `Could not find artifact org.apache.maven.wagon:wagon-http:jar:3.3.3-atlassian-03` or `javax.transaction:jta:jar:1.0.1B`.
+The development script supplies the included Maven settings automatically, so this setup is only needed when invoking Maven directly.
 
 ## Build
 
@@ -90,11 +81,11 @@ cd my-jira-gadget
 mvn package
 ```
 
-The installable plugin is written to `my-jira-gadget/target/sprint-pulse-<version>.jar`, for example `sprint-pulse-3.1.1-SNAPSHOT.jar` (an OBR file is also generated).
+The installable plugin is written to `my-jira-gadget/target/sprint-pulse-<version>.jar`, for example `sprint-pulse-3.1.2-SNAPSHOT.jar` (an OBR file is also generated).
 
 ## Run a local Jira
 
-`scripts/dev-jira.sh` starts a local Jira Software 9.4.0 with the plugin installed and loads a set of test data. It works on Linux and on Windows under WSL 2:
+`scripts/dev-jira.sh` starts Jira Software 10.3.26 with the latest local Sprint Pulse build installed and loads a set of test data. It works on Linux and on Windows under WSL 2:
 
 ```bash
 scripts/dev-jira.sh start    # start Jira and load the test data if it is missing
@@ -108,7 +99,7 @@ scripts/dev-jira.sh logs     # follow the Jira log
 
 Jira runs at <http://localhost:2990/jira>; log in as `admin` / `admin` and open the **Sprint Pulse** dashboard. The first start downloads Jira and takes 10 minutes or more; later starts take about three minutes.
 
-The script needs JDK 11, Maven, Python 3 and curl. It finds JDK 11 by itself (or uses `JAVA_HOME`), adds the Atlassian Maven repository for its own Maven runs and installs the `jta` artifact described above, so the one-time Maven setup is not needed when you use it. On WSL, keep the repository in the Linux file system (for example `~/sprint-pulse`), not under `/mnt/c` or a link into it: on the Windows file system Jira takes 30 minutes or more to start, usually times out, and its database can be damaged, so the script refuses to run there.
+The script needs JDK 17, Maven, Python 3 and curl. It finds JDK 17 by itself (or uses `JAVA_HOME`) and adds the Atlassian Maven repository for its own Maven runs, so the one-time Maven setup is not needed when you use it. On WSL, keep the repository in the Linux file system (for example `~/sprint-pulse`), not under `/mnt/c` or a link into it: on the Windows file system Jira takes 30 minutes or more to start, usually times out, and its database can be damaged, so the script refuses to run there.
 
 The test data, with sprint dates set relative to the day it is loaded:
 
@@ -117,16 +108,21 @@ The test data, with sprint dates set relative to the day it is loaded:
 | Sprint Pulse Test (SP) | SP board | SP Sprint 0 (closed), SP Sprint 1 (active: 21 points committed, 8 completed, 3 added, 5 removed, one blocked and one flagged issue), SP Sprint 2 (future) |
 | Mobile App (MOB) | MOB board | MOB Sprint 1 (closed), MOB Sprint 2 (active, one flagged issue), MOB Sprint 3 (future) |
 
-Loading is safe to repeat: projects that are already loaded are left alone, a load that was interrupted is redone, and existing projects that the script did not create are never changed. Jira's data lives in `my-jira-gadget/target/jira`, so `mvn clean` deletes it; the next `scripts/dev-jira.sh start` then creates a new Jira and loads the test data again. If the local Jira no longer starts, `scripts/dev-jira.sh fresh` moves it to `~/.local/state/sprint-pulse/backups` and starts a brand-new one with the test data.
+Loading is safe to repeat: projects that are already loaded are left alone, a load that was interrupted is redone, and existing projects that the script did not create are never changed. Jira's generated runtime and data live in `my-jira-gadget/target`, so `mvn clean` deletes them; the next `scripts/dev-jira.sh start` then creates a new Jira and loads the test data again. `scripts/dev-jira.sh fresh` moves the complete generated runtime to `~/.local/state/sprint-pulse/backups` before starting a brand-new Jira with test data.
 
-To run Jira by hand instead, run `mvn jira:run` (or `mvn jira:debug`, debugger on port 5005) from `my-jira-gadget` with `JAVA_HOME` set to JDK 11. `jira:run` stops Jira as soon as its standard input closes, so keep that terminal open.
+To run Jira by hand instead, run `mvn jira:run` (or `mvn jira:debug`, debugger on port 5005) from `my-jira-gadget` with `JAVA_HOME` set to JDK 17. `jira:run` stops Jira as soon as its standard input closes, so keep that terminal open.
 
 ## Installation
 
-1. Build the plugin (see above).
-2. In Jira, go to **Administration > Manage apps** (or **Apps > Manage apps**).
-3. Choose **Upload app** and select `target/sprint-pulse-<version>.jar`.
-4. Wait for the plugin to install and enable.
+1. Open the [latest Sprint Pulse release](https://github.com/garfield-arlene/sprint-pulse/releases/latest).
+2. Under **Assets**, download `sprint-pulse-<version>.jar`. Do not download the source code `.zip` or `.tar.gz`; Jira cannot install those archives.
+3. In Jira, go to **Administration > Manage apps** (or **Apps > Manage apps**).
+4. Choose **Upload app** and select the downloaded JAR.
+5. Wait for the plugin to install and enable.
+
+Developers building from source can instead run `mvn package` in `my-jira-gadget` and upload the JAR from `my-jira-gadget/target`.
+
+The development and verification target is Jira 10.3.26.
 
 ### Manual/offline alternative
 
@@ -213,7 +209,7 @@ The GitHub Actions workflow in `.github/workflows/build.yml` runs automatically 
 - **Lint** — validates the Maven project and XML descriptors, syntax-checks the gadget JavaScript, smoke-tests it against a stubbed DOM, and runs Checkstyle (report uploaded as the `checkstyle-report` artifact).
 - **Security scan** — runs Trivy against dependencies and the repository for `CRITICAL`/`HIGH` vulnerabilities and secrets.
 
-The build job then packages the plugin and uploads the JAR and OBR as the `sprint-pulse-plugin` artifact.
+The build job then packages the plugin and uploads the JAR and OBR as the `sprint-pulse-plugin` workflow artifact. A push of a `v*` tag also creates or updates the matching GitHub release and attaches the versioned JAR under **Assets**. To repair an existing tagged release, run the workflow manually and enter its tag (for example, `v3.1.2`) in **Existing v* tag to publish**.
 
 ## Development notes
 

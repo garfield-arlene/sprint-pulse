@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run a local Jira Software 9.4 for Sprint Pulse development, with the test data loaded.
+# Run a local Jira Software 10.3.26 for Sprint Pulse development, with the test data loaded.
 #
 #   scripts/dev-jira.sh start    start Jira (if needed) and load the test data (if missing)
 #   scripts/dev-jira.sh stop     stop Jira cleanly
@@ -9,12 +9,12 @@
 #   scripts/dev-jira.sh fresh    set the current Jira aside and start a brand-new one
 #   scripts/dev-jira.sh logs     follow the Jira log
 #
-# Jira runs at http://localhost:2990/jira (admin / admin). Its data lives in
-# my-jira-gadget/target/jira; this script never deletes it (`fresh` moves it to a backup).
+# Jira runs at http://localhost:2990/jira (admin / admin). Its generated runtime lives in
+# my-jira-gadget/target; this script never deletes it (`fresh` moves it to a backup).
 # If it is gone (for example after `mvn clean`), `start` creates a new Jira and loads the
 # test data again.
 #
-# Works on Linux and on WSL 2. Environment overrides: JAVA_HOME (a JDK 11), START_TIMEOUT
+# Works on Linux and on WSL 2. Environment overrides: JAVA_HOME (a JDK 17), START_TIMEOUT
 # (seconds, default 1800), MAVEN_ARGS (extra Maven options, Maven 3.9+).
 set -euo pipefail
 
@@ -44,10 +44,10 @@ on_windows_fs() {
 
 # --- checks -------------------------------------------------------------------------------
 
-find_java11() {
+find_java17() {
     local candidates=() c
     [ -n "${JAVA_HOME:-}" ] && candidates+=("$JAVA_HOME")
-    for c in "$HOME"/tools/jdk-11* /usr/lib/jvm/*-11-* /usr/lib/jvm/*11* /usr/lib/jvm/temurin-11*; do
+    for c in "$HOME"/tools/jdk-17* /usr/lib/jvm/*-17-* /usr/lib/jvm/*17* /usr/lib/jvm/temurin-17*; do
         [ -d "$c" ] && candidates+=("$c")
     done
     if command -v java >/dev/null; then
@@ -55,7 +55,7 @@ find_java11() {
     fi
     for c in "${candidates[@]}"; do
         if [ -x "$c/bin/java" ] && [ -x "$c/bin/javac" ] \
-            && "$c/bin/java" -version 2>&1 | grep -q 'version "11\.'; then
+            && "$c/bin/java" -version 2>&1 | grep -q 'version "17\.'; then
             echo "$c"
             return 0
         fi
@@ -92,10 +92,10 @@ the Linux file system instead, for example:
         note "    git config core.autocrlf input && git rm -rq --cached . && git reset --hard"
     fi
 
-    JAVA_HOME=$(find_java11) || die "JDK 11 not found. Jira 9.4 only runs on Java 8 or 11.
+    JAVA_HOME=$(find_java17) || die "JDK 17 not found. Jira 10.3 requires Java 17.
 Install it, then run this script again (or set JAVA_HOME to it):
-    Ubuntu/WSL: sudo apt install openjdk-11-jdk-headless
-    Other:      https://adoptium.net/temurin/releases/?version=11"
+    Ubuntu/WSL: sudo apt install openjdk-17-jdk-headless
+    Other:      https://adoptium.net/temurin/releases/?version=17"
     export JAVA_HOME
     export PATH=$JAVA_HOME/bin:$PATH
     MVN=$(find_maven) || die "Maven not found. Install Maven 3.8 or later (Ubuntu/WSL: sudo apt install maven)."
@@ -111,21 +111,6 @@ Install it, then run this script again (or set JAVA_HOME to it):
 
 mvn_cmd() {
     "$MVN" -B -ntp -gs "$ROOT/scripts/maven-settings.xml" "$@"
-}
-
-# The local Jira's Tomcat needs javax.transaction:jta:1.0.1B, which no public repository has.
-# jta 1.1 is API compatible, so install it under that version once.
-ensure_jta() {
-    local repo
-    repo=$(cd "$PLUGIN_DIR" && mvn_cmd -q help:evaluate -Dexpression=settings.localRepository -DforceStdout 2>/dev/null | tail -1)
-    [ -n "$repo" ] || repo=$HOME/.m2/repository
-    [ -f "$repo/javax/transaction/jta/1.0.1B/jta-1.0.1B.jar" ] && return 0
-    note "Installing javax.transaction:jta:1.0.1B into the local Maven repository (one time) ..."
-    (cd "$PLUGIN_DIR" && mvn_cmd -q dependency:get -Dartifact=javax.transaction:jta:1.1 \
-        && mvn_cmd -q install:install-file -DgroupId=javax.transaction -DartifactId=jta \
-            -Dversion=1.0.1B -Dpackaging=jar -DgeneratePom=true \
-            -Dfile="$repo/javax/transaction/jta/1.1/jta-1.1.jar") \
-        || die "Could not install jta 1.0.1B. Check the network connection to Maven Central."
 }
 
 # --- process handling ---------------------------------------------------------------------
@@ -155,7 +140,7 @@ explain_failure() {
     elif grep -q 'Address already in use' "$LOG"; then
         note "Port 2990 (or 8005/5005) is already used by another program."
     elif grep -q 'UnsupportedClassVersionError\|Unsupported class file' "$LOG"; then
-        note "The wrong Java version was used. Set JAVA_HOME to a JDK 11."
+        note "The wrong Java version was used. Set JAVA_HOME to a JDK 17."
     elif grep -qi 'OutOfMemoryError\|Cannot allocate memory' "$LOG"; then
         note "Jira ran out of memory. Close other programs or give WSL more memory (.wslconfig)."
     elif grep -q 'failed to finish deploying within the timeout' "$LOG"; then
@@ -178,7 +163,6 @@ start_jira() {
         note "Jira is still starting (log: $LOG)."
     else
         port_busy && die "Port 2990 is in use, but not by a running Jira. Stop that program first."
-        ensure_jta
         [ -d "$PLUGIN_DIR/target/jira/home" ] \
             && note "Starting Jira with the existing data in my-jira-gadget/target/jira ..." \
             || note "No local Jira yet: creating a new one (the first run downloads Jira and takes 10+ minutes) ..."
@@ -238,12 +222,12 @@ stop_jira() {
 
 fresh() {
     stop_jira quiet
-    if [ -d "$PLUGIN_DIR/target/jira" ]; then
+    if [ -d "$PLUGIN_DIR/target" ]; then
         local dest
-        dest=$BACKUP_DIR/jira-$(date +%Y%m%d-%H%M%S)
+        dest=$BACKUP_DIR/target-$(date +%Y%m%d-%H%M%S)
         mkdir -p "$BACKUP_DIR"
-        note "Moving the current Jira to $dest ..."
-        mv "$PLUGIN_DIR/target/jira" "$dest"
+        note "Moving the current generated Jira runtime to $dest ..."
+        mv "$PLUGIN_DIR/target" "$dest"
     fi
     start_jira
     seed

@@ -583,6 +583,8 @@
                         var completed = health.completedStoryPoints || 0;
                         var added = health.addedStoryPoints || 0;
                         var removed = health.removedStoryPoints || 0;
+                        var carriedOver = health.carriedOverStoryPoints || 0;
+                        var carriedOverIssues = health.carriedOverIssues || 0;
                         var totalIssues = health.totalIssues || 0;
                         var completedIssues = health.completedIssues || 0;
                         var pct = health.completionPercent || 0;
@@ -595,6 +597,7 @@
                             { label: 'Completed', value: formatNumber(completed), unit: 'SP', class: 'success', sub: 'Story Points' },
                             { label: 'Added', value: formatNumber(added), unit: 'SP', class: 'warning', sub: 'Scope Change' },
                             { label: 'Removed', value: formatNumber(removed), unit: 'SP', class: 'primary', sub: 'Scope Change' },
+                            { label: 'Carryover', value: carriedOverIssues, unit: carriedOverIssues === 1 ? 'issue' : 'issues', class: carriedOverIssues > 0 ? 'warning' : 'success', sub: formatNumber(carriedOver) + ' Story Points' },
                             { label: 'Blocked', value: blockedIssues || 0, unit: '', class: blockedIssues > 0 ? 'warning' : 'success', sub: 'Blocked Issues' },
                             { label: 'Flagged', value: flaggedIssues || 0, unit: '', class: flaggedIssues > 0 ? 'warning' : 'success', sub: 'Flagged Issues' },
                             { label: 'Issues', value: totalIssues, unit: '', class: 'primary', sub: completedIssues + ' completed' },

@@ -6,18 +6,18 @@
 
     <groupId>com.garfieldArlene.jira.gadget</groupId>
     <artifactId>sprint-pulse</artifactId>
-    <version>3.1.1-SNAPSHOT</version>
+    <version>3.1.2-SNAPSHOT</version>
     <packaging>atlassian-plugin</packaging>
 
     <name>Sprint Pulse</name>
     <description>Sprint health metrics and issues grouped by status with story points — combines Sprint Health and Sprint Statistics</description>
 
     <properties>
-        <jira.version>9.4.0</jira.version>
-        <amps.version>8.1.0</amps.version>
+        <jira.version>10.3.26</jira.version>
+        <amps.version>9.1.3</amps.version>
         <plugin.testrunner.version>2.1.0</plugin.testrunner.version>
-        <maven.compiler.source>11</maven.compiler.source>
-        <maven.compiler.target>11</maven.compiler.target>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -114,6 +114,10 @@
                     </applications>
                     <enableQuickReload>true</enableQuickReload>
                     <skipRestDocGeneration>true</skipRestDocGeneration>
+                    <banningExcludes>
+                        <!-- Jira 10 does not export Gson to third-party OSGi bundles. -->
+                        <exclude>com.google.code.gson:gson</exclude>
+                    </banningExcludes>
                     <instructions>
                         <Atlassian-Plugin-Key>${project.groupId}.${project.artifactId}</Atlassian-Plugin-Key>
                         <Export-Package>
@@ -140,8 +144,8 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
                 <configuration>
-                    <source>11</source>
-                    <target>11</target>
+                    <source>17</source>
+                    <target>17</target>
                 </configuration>
             </plugin>
         </plugins>
