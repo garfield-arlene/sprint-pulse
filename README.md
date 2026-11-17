@@ -209,7 +209,7 @@ The GitHub Actions workflow in `.github/workflows/build.yml` runs automatically 
 - **Lint** — validates the Maven project and XML descriptors, syntax-checks the gadget JavaScript, smoke-tests it against a stubbed DOM, and runs Checkstyle (report uploaded as the `checkstyle-report` artifact).
 - **Security scan** — runs Trivy against dependencies and the repository for `CRITICAL`/`HIGH` vulnerabilities and secrets.
 
-The build job then packages the plugin and uploads the JAR and OBR as the `sprint-pulse-plugin` artifact.
+The build job then packages the plugin and uploads the JAR and OBR as the `sprint-pulse-plugin` workflow artifact. A push of a `v*` tag also creates or updates the matching GitHub release and attaches the versioned JAR under **Assets**. To repair an existing tagged release, run the workflow manually and enter its tag (for example, `v3.1.2`) in **Existing v* tag to publish**.
 
 ## Development notes
 
