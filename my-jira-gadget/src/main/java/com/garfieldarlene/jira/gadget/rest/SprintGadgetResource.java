@@ -4,7 +4,9 @@ import com.atlassian.jira.bc.issue.search.SearchService;
 import com.atlassian.jira.component.ComponentAccessor;
 import com.atlassian.jira.issue.CustomFieldManager;
 import com.atlassian.jira.issue.Issue;
+import com.atlassian.jira.issue.changehistory.ChangeHistoryManager;
 import com.atlassian.jira.issue.fields.CustomField;
+import com.atlassian.jira.issue.history.ChangeItemBean;
 import com.atlassian.jira.issue.link.IssueLink;
 import com.atlassian.jira.issue.link.IssueLinkManager;
 import com.atlassian.jira.issue.search.SearchResults;
@@ -22,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -438,12 +441,25 @@ public class SprintGadgetResource {
         
         CustomField storyPointsField = getStoryPointsField();
         double committed = 0, completed = 0, added = 0, removed = 0;
+        double carriedOver = 0;
         int totalIssues = issues.size();
         int completedIssues = 0;
         int addedIssues = 0;
         int removedIssues = 0;
+        int carriedOverIssues = 0;
+        int changedEstimateIssues = 0;
+        double changedEstimateStoryPoints = 0;
         long sprintId = invokeLong(sprint, "getId");
         long rapidViewId = invokeLong(sprint, "getRapidViewId");
+        long previousSprintId = previousSprintId(sprint);
+        CustomField sprintField = getSprintCustomField();
+        long sprintStart = invokeDateTime(sprint, "getActivatedDate");
+        if (sprintStart == 0L) sprintStart = invokeDateTime(sprint, "getStartDate");
+        long sprintEnd = sprintEndTime(sprint);
+        if (sprintEnd == 0L || !"CLOSED".equals(invokeEnumName(sprint, "getState"))) {
+            sprintEnd = System.currentTimeMillis();
+        }
+        ChangeHistoryManager changeHistoryManager = ComponentAccessor.getChangeHistoryManager();
         
         Map<String, Double> spByKey = new HashMap<>();
         for (Issue issue : issues) {
@@ -457,6 +473,16 @@ public class SprintGadgetResource {
                 }
             } else if (isDone(issue)) {
                 completedIssues++;
+            }
+            if (wasInSprint(issue, sprintField, previousSprintId)) {
+                carriedOverIssues++;
+                if (sp != null) carriedOver += sp;
+            }
+            Double estimateDelta = storyPointDeltaDuringSprint(
+                issue, storyPointsField, changeHistoryManager, sprintStart, sprintEnd);
+            if (estimateDelta != null) {
+                changedEstimateIssues++;
+                changedEstimateStoryPoints += estimateDelta;
             }
         }
         
@@ -497,14 +523,105 @@ public class SprintGadgetResource {
         health.addProperty("completedStoryPoints", completed);
         health.addProperty("addedStoryPoints", added);
         health.addProperty("removedStoryPoints", removed);
+        health.addProperty("carriedOverStoryPoints", carriedOver);
         health.addProperty("totalIssues", totalIssues);
         health.addProperty("completedIssues", completedIssues);
         health.addProperty("addedIssues", addedIssues);
         health.addProperty("removedIssues", removedIssues);
+        health.addProperty("carriedOverIssues", carriedOverIssues);
+        health.addProperty("changedEstimateIssues", changedEstimateIssues);
+        health.addProperty("changedEstimateStoryPoints", changedEstimateStoryPoints);
         health.addProperty("completionPercent", committed > 0 ? Math.round((completed / committed) * 100) : 0);
         health.addProperty("issueCompletionPercent", totalIssues > 0 ? Math.round((completedIssues / (double) totalIssues) * 100) : 0);
         
         return health;
+    }
+
+    /**
+     * Returns the net Story Point change for an issue during the sprint, or {@code null} when its
+     * estimate was not edited. Multiple edits count as one changed issue and their deltas are
+     * combined, so (for example) 3 -> 5 -> 8 is reported as +5 rather than two changed stories.
+     */
+    private Double storyPointDeltaDuringSprint(Issue issue, CustomField storyPointsField,
+                                                ChangeHistoryManager changeHistoryManager,
+                                                long sprintStart, long sprintEnd) {
+        if (storyPointsField == null || sprintStart == 0L || sprintStart == Long.MAX_VALUE) {
+            return null;
+        }
+        double delta = 0;
+        boolean changed = false;
+        List<ChangeItemBean> changes = changeHistoryManager.getChangeItemsForField(
+            issue, storyPointsField.getName(), new Date(sprintStart));
+        for (ChangeItemBean change : changes) {
+            if (change.getCreated() == null || change.getCreated().getTime() > sprintEnd) continue;
+            Double before = parseStoryPoints(change.getFromString());
+            Double after = parseStoryPoints(change.getToString());
+            double beforeValue = before == null ? 0 : before;
+            double afterValue = after == null ? 0 : after;
+            if (Double.compare(beforeValue, afterValue) != 0) {
+                changed = true;
+                delta += afterValue - beforeValue;
+            }
+        }
+        return changed ? delta : null;
+    }
+
+    private Double parseStoryPoints(String value) {
+        if (value == null || value.trim().isEmpty()) return null;
+        try {
+            return Double.valueOf(value.trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Finds the sprint immediately before this one on the same board. Jira Software sequences
+     * sprints per board, so sequence is more reliable than planned dates when sprints overlap or
+     * finish late. The date fallback supports older or partially populated sprint values.
+     */
+    private long previousSprintId(Object sprint) {
+        long rapidViewId = invokeLong(sprint, "getRapidViewId");
+        long currentSequence = invokeLong(sprint, "getSequence");
+        long currentStart = invokeDateTime(sprint, "getActivatedDate");
+        if (currentStart == 0L) currentStart = invokeDateTime(sprint, "getStartDate");
+        if (rapidViewId == 0L) return 0L;
+
+        Object previous = null;
+        long previousSequence = Long.MIN_VALUE;
+        long previousEnd = Long.MIN_VALUE;
+        for (Object candidate : findSprints(null, rapidViewId)) {
+            if (!"CLOSED".equals(invokeEnumName(candidate, "getState"))) continue;
+            if (invokeLong(candidate, "getId").equals(invokeLong(sprint, "getId"))) continue;
+
+            long sequence = invokeLong(candidate, "getSequence");
+            if (currentSequence > 0L && sequence > 0L) {
+                if (sequence < currentSequence && sequence > previousSequence) {
+                    previous = candidate;
+                    previousSequence = sequence;
+                }
+                continue;
+            }
+
+            long end = invokeDateTime(candidate, "getCompleteDate");
+            if (end == 0L) end = sprintEndTime(candidate);
+            if ((currentStart == 0L || end <= currentStart) && end > previousEnd) {
+                previous = candidate;
+                previousEnd = end;
+            }
+        }
+        return previous != null ? invokeLong(previous, "getId") : 0L;
+    }
+
+    /** Jira retains completed sprint values on an issue when it is moved into a later sprint. */
+    private boolean wasInSprint(Issue issue, CustomField sprintField, long sprintId) {
+        if (sprintField == null || sprintId == 0L) return false;
+        Object value = issue.getCustomFieldValue(sprintField);
+        if (!(value instanceof Collection)) return false;
+        for (Object issueSprint : (Collection<?>) value) {
+            if (invokeLong(issueSprint, "getId") == sprintId) return true;
+        }
+        return false;
     }
 
     /**
