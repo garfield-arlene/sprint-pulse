@@ -79,6 +79,8 @@
                 .paired-metric { flex: 1; min-width: 0; }
                 .paired-metric + .paired-metric { border-left: 1px solid #dfe1e6; }
                 .paired-metric .health-value { font-size: 22px; }
+                .committed-card, .completion-card, .estimate-change-card { display: flex; flex-direction: column; }
+                .committed-card .health-label, .completion-card .health-label, .estimate-change-card .health-label { margin-top: auto; padding-top: 8px; }
                 
                 /* Progress bar */
                 .progress-container { margin-top: 12px; }
@@ -591,37 +593,52 @@
                         var carriedOverIssues = health.carriedOverIssues || 0;
                         var totalIssues = health.totalIssues || 0;
                         var completedIssues = health.completedIssues || 0;
+                        var changedEstimateIssues = health.changedEstimateIssues || 0;
+                        var changedEstimateStoryPoints = health.changedEstimateStoryPoints || 0;
                         var pct = health.completionPercent || 0;
                         var issuePct = health.issueCompletionPercent || 0;
 
                         healthGrid.innerHTML = '';
 
                         var cards = [
-                            { label: 'Committed', value: formatNumber(committed), unit: 'SP', class: 'primary', sub: 'Story Points' },
+                            { type: 'committed', storyPoints: formatNumber(committed), totalIssues: totalIssues },
                             { type: 'completion', completed: formatNumber(completed), percentage: pct, percentageClass: pct >= 100 ? 'success' : (pct >= 70 ? 'primary' : 'warning') },
                             { type: 'scopeChange', added: formatNumber(added), removed: formatNumber(removed) },
+                            { type: 'estimateChange', issues: changedEstimateIssues, delta: changedEstimateStoryPoints },
                             { label: 'Carryover', value: carriedOverIssues, unit: carriedOverIssues === 1 ? 'issue' : 'issues', class: carriedOverIssues > 0 ? 'warning' : 'success', sub: formatNumber(carriedOver) + ' Story Points' },
                             { label: 'Blocked', value: blockedIssues || 0, unit: '', class: blockedIssues > 0 ? 'warning' : 'success', sub: 'Blocked Issues' },
-                            { label: 'Flagged', value: flaggedIssues || 0, unit: '', class: flaggedIssues > 0 ? 'warning' : 'success', sub: 'Flagged Issues' },
-                            { label: 'Issues', value: totalIssues, unit: '', class: 'primary', sub: completedIssues + ' completed' }
+                            { label: 'Flagged', value: flaggedIssues || 0, unit: '', class: flaggedIssues > 0 ? 'warning' : 'success', sub: 'Flagged Issues' }
                         ];
 
                         cards.forEach(function(card) {
                             var div = document.createElement('div');
+                            if (card.type === 'committed') {
+                                div.className = 'health-card committed-card';
+                                div.innerHTML =
+                                    '<div class="paired-values">' +
+                                        '<div class="paired-metric">' +
+                                            '<div class="health-value primary">' + card.storyPoints + '<span style="font-size:12px;font-weight:400;color:inherit;margin-left:2px;">SP</span></div>' +
+                                        '</div>' +
+                                        '<div class="paired-metric">' +
+                                            '<div class="health-value primary">' + card.totalIssues + '<span style="font-size:12px;font-weight:400;color:inherit;margin-left:2px;">' + (card.totalIssues === 1 ? 'issue' : 'issues') + '</span></div>' +
+                                        '</div>' +
+                                    '</div>' +
+                                    '<div class="health-label">Committed</div>';
+                                healthGrid.appendChild(div);
+                                return;
+                            }
                             if (card.type === 'completion') {
                                 div.className = 'health-card completion-card';
                                 div.innerHTML =
                                     '<div class="paired-values">' +
                                         '<div class="paired-metric">' +
                                             '<div class="health-value success">' + card.completed + '<span style="font-size:12px;font-weight:400;color:inherit;margin-left:2px;">SP</span></div>' +
-                                            '<div class="health-label">Completed</div>' +
                                         '</div>' +
                                         '<div class="paired-metric">' +
                                             '<div class="health-value ' + card.percentageClass + '">' + card.percentage + '<span style="font-size:12px;font-weight:400;color:inherit;margin-left:2px;">%</span></div>' +
-                                            '<div class="health-label">Completion</div>' +
                                         '</div>' +
                                     '</div>' +
-                                    '<div class="health-sub">Story Points</div>';
+                                    '<div class="health-label">Completed</div>';
                                 healthGrid.appendChild(div);
                                 return;
                             }
@@ -639,6 +656,23 @@
                                         '</div>' +
                                     '</div>' +
                                     '<div class="health-sub">Scope Change</div>';
+                                healthGrid.appendChild(div);
+                                return;
+                            }
+                            if (card.type === 'estimateChange') {
+                                var deltaClass = card.delta === 0 ? 'primary' : 'warning';
+                                var signedDelta = card.delta > 0 ? '+' + formatNumber(card.delta) : formatNumber(card.delta);
+                                div.className = 'health-card estimate-change-card';
+                                div.innerHTML =
+                                    '<div class="paired-values">' +
+                                        '<div class="paired-metric">' +
+                                            '<div class="health-value ' + (card.issues > 0 ? 'warning' : 'success') + '">' + card.issues + '<span style="font-size:12px;font-weight:400;color:inherit;margin-left:2px;">' + (card.issues === 1 ? 'issue' : 'issues') + '</span></div>' +
+                                        '</div>' +
+                                        '<div class="paired-metric">' +
+                                            '<div class="health-value ' + deltaClass + '">' + signedDelta + '<span style="font-size:12px;font-weight:400;color:inherit;margin-left:2px;">SP</span></div>' +
+                                        '</div>' +
+                                    '</div>' +
+                                    '<div class="health-label">Estimates Changed</div>';
                                 healthGrid.appendChild(div);
                                 return;
                             }

@@ -18,6 +18,7 @@ const SPRINT_DATA = {
     health: {
         committedStoryPoints: 31, completedStoryPoints: 11, addedStoryPoints: 3,
         removedStoryPoints: 2, carriedOverStoryPoints: 8, carriedOverIssues: 2,
+        changedEstimateIssues: 2, changedEstimateStoryPoints: 3,
         totalIssues: 9, completedIssues: 3,
         completionPercent: 35, issueCompletionPercent: 33
     },
@@ -199,18 +200,28 @@ async function storedBoardScenario() {
     assert(app.dataCalls() === 1, 'initial load fetched sprint data once (got ' + app.dataCalls() + ')');
     assert(app.elements.healthGrid.children.length === 7,
         'health grid rendered 7 cards (got ' + app.elements.healthGrid.children.length + ')');
+    assert(app.elements.healthGrid.children[0].innerHTML.indexOf('31<span') !== -1
+        && app.elements.healthGrid.children[0].innerHTML.indexOf('9<span') !== -1
+        && app.elements.healthGrid.children[0].innerHTML.indexOf('Committed') !== -1
+        && app.elements.healthGrid.children[0].innerHTML.indexOf('health-sub') === -1,
+        'committed card shows both values with only its shared label');
     assert(app.elements.healthGrid.children[1].innerHTML.indexOf('11<span') !== -1
         && app.elements.healthGrid.children[1].innerHTML.indexOf('Completed') !== -1
         && app.elements.healthGrid.children[1].innerHTML.indexOf('35<span') !== -1
-        && app.elements.healthGrid.children[1].innerHTML.indexOf('Completion') !== -1,
-        'completion card shows completed story points and percentage');
+        && app.elements.healthGrid.children[1].innerHTML.indexOf('Completion') === -1
+        && app.elements.healthGrid.children[1].innerHTML.indexOf('health-sub') === -1,
+        'completion card shows both values with only its shared label');
     assert(app.elements.healthGrid.children[2].innerHTML.indexOf('3<span') !== -1
         && app.elements.healthGrid.children[2].innerHTML.indexOf('Added') !== -1
         && app.elements.healthGrid.children[2].innerHTML.indexOf('2<span') !== -1
         && app.elements.healthGrid.children[2].innerHTML.indexOf('Removed') !== -1,
         'scope change card shows added and removed story points');
     assert(app.elements.healthGrid.children[3].innerHTML.indexOf('2<span') !== -1
-        && app.elements.healthGrid.children[3].innerHTML.indexOf('8 Story Points') !== -1,
+        && app.elements.healthGrid.children[3].innerHTML.indexOf('+3<span') !== -1
+        && app.elements.healthGrid.children[3].innerHTML.indexOf('Estimates Changed') !== -1,
+        'estimate change card shows changed issues and net story-point delta');
+    assert(app.elements.healthGrid.children[4].innerHTML.indexOf('2<span') !== -1
+        && app.elements.healthGrid.children[4].innerHTML.indexOf('8 Story Points') !== -1,
         'carryover card shows issue and story-point counts');
     assert(/^Updated /.test(app.elements.lastUpdated.textContent),
         'last-updated label populated: "' + app.elements.lastUpdated.textContent + '"');

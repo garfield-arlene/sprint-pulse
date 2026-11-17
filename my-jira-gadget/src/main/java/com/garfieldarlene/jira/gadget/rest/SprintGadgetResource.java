@@ -4,7 +4,9 @@ import com.atlassian.jira.bc.issue.search.SearchService;
 import com.atlassian.jira.component.ComponentAccessor;
 import com.atlassian.jira.issue.CustomFieldManager;
 import com.atlassian.jira.issue.Issue;
+import com.atlassian.jira.issue.changehistory.ChangeHistoryManager;
 import com.atlassian.jira.issue.fields.CustomField;
+import com.atlassian.jira.issue.history.ChangeItemBean;
 import com.atlassian.jira.issue.link.IssueLink;
 import com.atlassian.jira.issue.link.IssueLinkManager;
 import com.atlassian.jira.issue.search.SearchResults;
@@ -22,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -444,10 +447,19 @@ public class SprintGadgetResource {
         int addedIssues = 0;
         int removedIssues = 0;
         int carriedOverIssues = 0;
+        int changedEstimateIssues = 0;
+        double changedEstimateStoryPoints = 0;
         long sprintId = invokeLong(sprint, "getId");
         long rapidViewId = invokeLong(sprint, "getRapidViewId");
         long previousSprintId = previousSprintId(sprint);
         CustomField sprintField = getSprintCustomField();
+        long sprintStart = invokeDateTime(sprint, "getActivatedDate");
+        if (sprintStart == 0L) sprintStart = invokeDateTime(sprint, "getStartDate");
+        long sprintEnd = sprintEndTime(sprint);
+        if (sprintEnd == 0L || !"CLOSED".equals(invokeEnumName(sprint, "getState"))) {
+            sprintEnd = System.currentTimeMillis();
+        }
+        ChangeHistoryManager changeHistoryManager = ComponentAccessor.getChangeHistoryManager();
         
         Map<String, Double> spByKey = new HashMap<>();
         for (Issue issue : issues) {
@@ -465,6 +477,12 @@ public class SprintGadgetResource {
             if (wasInSprint(issue, sprintField, previousSprintId)) {
                 carriedOverIssues++;
                 if (sp != null) carriedOver += sp;
+            }
+            Double estimateDelta = storyPointDeltaDuringSprint(
+                issue, storyPointsField, changeHistoryManager, sprintStart, sprintEnd);
+            if (estimateDelta != null) {
+                changedEstimateIssues++;
+                changedEstimateStoryPoints += estimateDelta;
             }
         }
         
@@ -511,10 +529,50 @@ public class SprintGadgetResource {
         health.addProperty("addedIssues", addedIssues);
         health.addProperty("removedIssues", removedIssues);
         health.addProperty("carriedOverIssues", carriedOverIssues);
+        health.addProperty("changedEstimateIssues", changedEstimateIssues);
+        health.addProperty("changedEstimateStoryPoints", changedEstimateStoryPoints);
         health.addProperty("completionPercent", committed > 0 ? Math.round((completed / committed) * 100) : 0);
         health.addProperty("issueCompletionPercent", totalIssues > 0 ? Math.round((completedIssues / (double) totalIssues) * 100) : 0);
         
         return health;
+    }
+
+    /**
+     * Returns the net Story Point change for an issue during the sprint, or {@code null} when its
+     * estimate was not edited. Multiple edits count as one changed issue and their deltas are
+     * combined, so (for example) 3 -> 5 -> 8 is reported as +5 rather than two changed stories.
+     */
+    private Double storyPointDeltaDuringSprint(Issue issue, CustomField storyPointsField,
+                                                ChangeHistoryManager changeHistoryManager,
+                                                long sprintStart, long sprintEnd) {
+        if (storyPointsField == null || sprintStart == 0L || sprintStart == Long.MAX_VALUE) {
+            return null;
+        }
+        double delta = 0;
+        boolean changed = false;
+        List<ChangeItemBean> changes = changeHistoryManager.getChangeItemsForField(
+            issue, storyPointsField.getName(), new Date(sprintStart));
+        for (ChangeItemBean change : changes) {
+            if (change.getCreated() == null || change.getCreated().getTime() > sprintEnd) continue;
+            Double before = parseStoryPoints(change.getFromString());
+            Double after = parseStoryPoints(change.getToString());
+            double beforeValue = before == null ? 0 : before;
+            double afterValue = after == null ? 0 : after;
+            if (Double.compare(beforeValue, afterValue) != 0) {
+                changed = true;
+                delta += afterValue - beforeValue;
+            }
+        }
+        return changed ? delta : null;
+    }
+
+    private Double parseStoryPoints(String value) {
+        if (value == null || value.trim().isEmpty()) return null;
+        try {
+            return Double.valueOf(value.trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     /**
