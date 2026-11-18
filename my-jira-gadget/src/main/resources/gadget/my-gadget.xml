@@ -123,6 +123,7 @@
                 .issue-type.default { background: #f4f5f7; color: #5e6c84; }
                 .story-points { font-weight: 600; color: #172b4d; text-align: right; font-variant-numeric: tabular-nums; }
                 .story-points.zero { color: #a5adba; }
+                .estimate-delta { margin-left: 4px; color: #5e6c84; font-size: 11px; white-space: nowrap; }
                 .assignee { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
                 .assignee-avatar { width: 20px; height: 20px; border-radius: 50%; background: #0052cc; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; }
                 .priority { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; text-transform: capitalize; }
@@ -433,6 +434,10 @@
                         return num % 1 === 0 ? num.toString() : num.toFixed(1);
                     }
 
+                    function formatSignedNumber(num) {
+                        return (num > 0 ? '+' : '') + formatNumber(num);
+                    }
+
                     function setLoading(loading, silent) {
                         isLoading = loading;
                         if (silent) return;
@@ -661,7 +666,7 @@
                             }
                             if (card.type === 'estimateChange') {
                                 var deltaClass = card.delta === 0 ? 'primary' : 'warning';
-                                var signedDelta = card.delta > 0 ? '+' + formatNumber(card.delta) : formatNumber(card.delta);
+                                var signedDelta = formatSignedNumber(card.delta);
                                 div.className = 'health-card estimate-change-card';
                                 div.innerHTML =
                                     '<div class="paired-values">' +
@@ -714,6 +719,15 @@
                             allIssues = allIssues.concat(issuesByStatus[status]);
                         });
                         var totalSp = sumStoryPoints(allIssues);
+                        var changedEstimateIssues = allIssues.filter(function(issue) {
+                            return typeof issue.estimateDelta === 'number' && isFinite(issue.estimateDelta);
+                        });
+                        var totalEstimateDelta = changedEstimateIssues.reduce(function(sum, issue) {
+                            return sum + issue.estimateDelta;
+                        }, 0);
+                        var totalEstimateDeltaHtml = changedEstimateIssues.length
+                            ? ' <span class="estimate-delta">(' + formatSignedNumber(totalEstimateDelta) + ')</span>'
+                            : '';
 
                         statuses.forEach(function(status) {
                             renderStatusGroup(status, issuesByStatus[status], rows, totalSp);
@@ -726,7 +740,7 @@
                         }).reduce(function(sum, i){ return sum + (i.storyPoints || 0); }, 0);
                         rows.push('<tr class="summary-row">' +
                             '<td colspan="3">Total</td>' +
-                            '<td style="text-align:right;">' + formatNumber(totalSp) + ' SP</td>' +
+                            '<td style="text-align:right;">' + formatNumber(totalSp) + ' SP' + totalEstimateDeltaHtml + '</td>' +
                             '<td>' + allIssues.length + ' issues</td>' +
                             '<td>' + formatNumber(completedSP) + ' SP done</td>' +
                             '<td></td>' +
@@ -765,6 +779,10 @@
                             var priClass = classFor(priorityClass, priority, 'none');
                             var sp = issue.storyPoints || 0;
                             var spClass = sp > 0 ? '' : ' zero';
+                            var hasEstimateDelta = typeof issue.estimateDelta === 'number' && isFinite(issue.estimateDelta);
+                            var estimateDeltaHtml = hasEstimateDelta
+                                ? ' <span class="estimate-delta">(' + formatSignedNumber(issue.estimateDelta) + ')</span>'
+                                : '';
                             
                             var assigneeHtml = issue.assignee && issue.assignee !== 'Unassigned' 
                                 ? '<span class="assignee"><span class="assignee-avatar" style="background:' + getAvatarColor(issue.assignee) + '">' + escapeHtml(getInitials(issue.assignee)) + '</span>' + escapeHtml(issue.assignee) + '</span>'
@@ -787,7 +805,7 @@
                                 '<td><a class="issue-key" href="' + escapeHtml(baseUrl + '/browse/' + encodeURIComponent(issue.key)) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(issue.key) + '</a></td>' +
                                 '<td><span class="issue-summary" title="' + escapeHtml(issue.summary) + '">' + escapeHtml(issue.summary) + '</span></td>' +
                                 '<td><span class="issue-type ' + typeClass + '">' + escapeHtml(issue.issueType) + '</span></td>' +
-                                '<td class="story-points' + spClass + '" style="text-align:right;">' + formatNumber(sp) + '</td>' +
+                                '<td class="story-points' + spClass + '" style="text-align:right;">' + formatNumber(sp) + estimateDeltaHtml + '</td>' +
                                 '<td>' + assigneeHtml + '</td>' +
                                 '<td><span class="priority ' + priClass + '">' + escapeHtml(issue.priority || 'None') + '</span></td>' +
                                 '<td>' + flagsHtml + '</td>' +
