@@ -136,9 +136,10 @@ public class SprintGadgetResource {
                     .entity("{\"error\":\"Sprint not found\"}").build();
             }
 
+            Map<String, Double> estimateDeltasByIssue = new HashMap<>();
             result.add("sprint", buildSprintJson(sprint));
-            result.add("health", buildHealthJson(sprint));
-            result.add("issuesByStatus", buildIssuesByStatusJson(sprint));
+            result.add("health", buildHealthJson(sprint, estimateDeltasByIssue));
+            result.add("issuesByStatus", buildIssuesByStatusJson(sprint, estimateDeltasByIssue));
 
             return Response.ok(result.toString()).build();
 
@@ -435,7 +436,7 @@ public class SprintGadgetResource {
         return json;
     }
 
-    private JsonObject buildHealthJson(Object sprint) {
+    private JsonObject buildHealthJson(Object sprint, Map<String, Double> estimateDeltasByIssue) {
         JsonObject health = new JsonObject();
         List<Issue> issues = getSprintIssues(sprint);
         
@@ -481,6 +482,7 @@ public class SprintGadgetResource {
             Double estimateDelta = storyPointDeltaDuringSprint(
                 issue, storyPointsField, changeHistoryManager, sprintStart, sprintEnd);
             if (estimateDelta != null) {
+                estimateDeltasByIssue.put(issue.getKey(), estimateDelta);
                 changedEstimateIssues++;
                 changedEstimateStoryPoints += estimateDelta;
             }
@@ -929,7 +931,8 @@ public class SprintGadgetResource {
         return estimates;
     }
 
-    private JsonObject buildIssuesByStatusJson(Object sprint) {
+    private JsonObject buildIssuesByStatusJson(Object sprint,
+                                                Map<String, Double> estimateDeltasByIssue) {
         JsonObject result = new JsonObject();
         List<Issue> issues = getSprintIssues(sprint);
         CustomField storyPointsField = getStoryPointsField();
@@ -937,7 +940,8 @@ public class SprintGadgetResource {
         Map<String, List<JsonObject>> grouped = new LinkedHashMap<>();
         for (Issue issue : issues) {
             String status = issue.getStatus().getName();
-            grouped.computeIfAbsent(status, k -> new ArrayList<>()).add(buildIssueJson(issue, storyPointsField));
+            grouped.computeIfAbsent(status, k -> new ArrayList<>()).add(buildIssueJson(
+                issue, storyPointsField, estimateDeltasByIssue.get(issue.getKey())));
         }
 
         // Sort statuses: To Do -> In Progress -> In Review -> Done
@@ -983,7 +987,8 @@ public class SprintGadgetResource {
         }
     }
 
-    private JsonObject buildIssueJson(Issue issue, CustomField storyPointsField) {
+    private JsonObject buildIssueJson(Issue issue, CustomField storyPointsField,
+                                      Double estimateDelta) {
         JsonObject json = new JsonObject();
         json.addProperty("key", issue.getKey());
         json.addProperty("summary", issue.getSummary());
@@ -995,6 +1000,9 @@ public class SprintGadgetResource {
         
         Double sp = getStoryPoints(issue, storyPointsField);
         json.addProperty("storyPoints", sp != null ? sp : 0);
+        if (estimateDelta != null) {
+            json.addProperty("estimateDelta", estimateDelta);
+        }
         
         // Blocked status (issue links)
         boolean blocked = isBlocked(issue);

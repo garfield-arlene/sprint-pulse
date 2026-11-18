@@ -24,7 +24,7 @@ const SPRINT_DATA = {
     },
     issuesByStatus: {
         'To Do': [{ key: 'SP-15', summary: 'Do the thing', issueType: 'Story', storyPoints: 2, statusCategory: 'new', assignee: 'a', priority: 'Medium' }],
-        'Done': [{ key: 'SP-11', summary: 'Done thing', issueType: 'Story', storyPoints: 5, statusCategory: 'done', assignee: 'b', priority: 'High' }]
+        'Done': [{ key: 'SP-11', summary: 'Done thing', issueType: 'Story', storyPoints: 5, estimateDelta: 3, statusCategory: 'done', assignee: 'b', priority: 'High' }]
     }
 };
 
@@ -229,6 +229,12 @@ async function storedBoardScenario() {
         'progress label shows 35%: ' + app.elements.progressPercent.textContent);
     assert(app.elements.issueCount.textContent === '2 issues',
         'issue count rendered: ' + app.elements.issueCount.textContent);
+    assert(app.elements.issuesBody.innerHTML.indexOf('5 <span class="estimate-delta">(+3)</span>') !== -1,
+        'changed issue shows its current story points and signed estimate delta');
+    assert(app.elements.issuesBody.innerHTML.indexOf('2 <span class="estimate-delta">') === -1,
+        'unchanged issue does not show an estimate delta');
+    assert(app.elements.issuesBody.innerHTML.indexOf('7 SP <span class="estimate-delta">(+3)</span>') !== -1,
+        'summary total shows the net estimate delta');
     assert(app.activeIntervals().length === 1, 'exactly one auto-refresh timer registered');
     assert(app.activeIntervals()[0].delay === 30000,
         'timer delay is 30000ms (got ' + app.activeIntervals()[0].delay + ')');
