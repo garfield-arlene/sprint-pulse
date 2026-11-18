@@ -7,7 +7,7 @@
 
 A Jira Server/Data Center dashboard gadget that combines the ideas of **Sprint Health** and **Sprint Statistics** into a single view: sprint health metrics at the top, and all sprint issues grouped by status with story points below.
 
-![Sprint Pulse gadget showing an active sprint: health cards with scope change, blocked and flagged counts, and issues grouped by status](dash-health.png)
+![Sprint Pulse showing an active sprint with scope change, estimate changes, carryover, impediments, and issues grouped by status](dash-health.png)
 
 ## Features
 
@@ -17,11 +17,13 @@ A Jira Server/Data Center dashboard gadget that combines the ideas of **Sprint H
   - Committed story points
   - Completed story points
   - Story points added and removed during the sprint (scope change)
+  - Issues carried over from the previous sprint and their current story points
+  - Story Point estimates changed during the sprint, with the affected issue count and net point change
   - Blocked and flagged issue counts
   - Total/completed issue counts
   - Story-point completion percentage with a progress bar
-- **Issues by status**, grouped and collapsible, showing key, summary, type, story points, assignee, priority, and blocked/flagged indicators.
-- **Per-group totals** and a sprint summary row (total SP, issue count, completed SP).
+- **Issues by status**, grouped and collapsible, showing key, summary, type, current story points, per-issue estimate changes, assignee, priority, and blocked/flagged indicators.
+- **Per-group totals** and a sprint summary row (total SP with net estimate change, issue count, completed SP).
 - **Blocked/flagged detection** from issue links, custom fields, and labels.
 - **Auto-refresh** (every 30 seconds by default, configurable or off) that keeps the metrics live, with a last-updated timestamp and no polling while the browser tab is hidden. The interval is selectable in the gadget itself, next to the Refresh button, so it can be changed even when the gadget's configuration form is not available.
 - **Permission-aware**: all queries run as the logged-in user, so only issues that user can see are returned.
@@ -133,11 +135,7 @@ Copy the JAR into `<jira-home>/plugins/installed-plugins/` and restart Jira.
 1. Open or create a dashboard and choose **Add gadget**.
 2. Search for **Sprint Pulse** and add it.
 3. Optionally pick a board from the dropdown next to the sprint list to limit it to a single board (also settable as **Board ID** in the configuration dialog). `All boards` lists sprints from every board you can see. The dropdown hides itself when only one board is available or the board list cannot be loaded, in which case the sprint list keeps working.
-
-   ![Board selector open with All boards and two boards listed](board-selector.png)
 4. Select a sprint from the dropdown. It lists the running sprint, sprints still to come, and the 20 most recent closed sprints on the visible boards. The gadget loads health metrics and issues automatically; the running sprint is preselected, so the gadget shows data as soon as it loads.
-
-   ![Sprint picker open with the active sprint selected, plus future and closed sprints](sprint-selector.png)
 5. Click **Refresh** to reload the selected sprint on demand. By default the gadget also refreshes itself every 30 seconds; the last-updated time next to the button shows when the data was fetched. The dropdown next to the button sets the refresh interval (`Auto off`, `Every 30s`, `Every 1m`, `Every 5m`) and is remembered per user.
 
 The selected sprint is saved as a gadget preference. Other preferences (shown in the configuration dialog) include:
@@ -160,9 +158,13 @@ The gadget uses the first custom field named **Story Points** or **Story Point E
 - **Committed**: story points currently in the sprint, minus points added after sprint start, plus points removed from the sprint.
 - **Completed**: story points on issues whose status category is **Done**.
 - **Added/Removed**: read from the GreenHopper sprint report, including the story points of issues added to or removed from the sprint; issue counts come from the report's added/punted issue lists.
+- **Carryover**: current sprint issues that also retain the immediately previous sprint on the same board in their Sprint field.
+- **Estimates changed**: Story Point edits from sprint activation through closure (or now for an active sprint). The card counts each affected issue once and nets multiple edits. Each affected issue shows its signed net change beside its current value, such as `5 (+3)`, and the table total shows the overall net change, such as `19 SP (+3)`.
 - **Story points** are summed from all four issue lists in the sprint report (completed, incomplete, added, removed), so points on issues that were added and then removed still count toward the added/removed metrics.
 - **Blocked**: issue has an issue link whose type name contains `block` or `imped`, or a populated custom field whose name contains `flag`, `impediment`, or `blocked`, or a `flagged`/`impediment` label.
 - **Flagged**: a populated **Flagged** or **Impediment Flag** custom field, or a `flagged`/`impediment` label.
+
+![Issue table showing a per-issue Story Point change and the matching net change in the total row](estimate-change-details.png)
 
 ## REST API
 
