@@ -7,7 +7,7 @@
 
 A Jira Server/Data Center dashboard gadget that combines the ideas of **Sprint Health** and **Sprint Statistics** into a single view: sprint health metrics at the top, and all sprint issues grouped by status with story points below.
 
-![Sprint Pulse showing an active sprint with scope change, estimate changes, carryover, impediments, and issues grouped by status](dash-health.png)
+![Sprint Pulse showing an active sprint with scope change, estimate changes, carryover, impediments, and issues grouped by status](dash-health-4.0.png)
 
 ## Features
 
